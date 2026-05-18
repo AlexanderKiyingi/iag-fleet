@@ -1,0 +1,2 @@
+-- Superseded by 0007_drop_legacy_auth.sql (local IAM removed).
+-- Retained so migration version ordering stays stable on existing databases.

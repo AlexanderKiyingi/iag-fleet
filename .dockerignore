@@ -1,0 +1,14 @@
+.git
+.gitignore
+*.md
+*.test
+*.exe
+.env
+.env.example
+.DS_Store
+node_modules
+
+# Don't copy local build artifacts into the build context — speeds up COPY.
+/bin/
+/dist/
+/out/
