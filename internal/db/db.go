@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,6 +23,9 @@ func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	}
 	if url == "" {
 		return nil, errors.New("DATABASE_URL is empty")
+	}
+	if err := validateDatabaseURL(url); err != nil {
+		return nil, err
 	}
 
 	cfg, err := pgxpool.ParseConfig(url)
@@ -45,6 +50,30 @@ func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("ping: %w", err)
 	}
 	return pool, nil
+}
+
+// validateDatabaseURL rejects local dev DSNs when running in production or on Railway.
+func validateDatabaseURL(dsn string) error {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return fmt.Errorf("parse DATABASE_URL: %w", err)
+	}
+	host := strings.ToLower(u.Hostname())
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return nil
+	}
+	onRailway := os.Getenv("RAILWAY_ENVIRONMENT") != "" || os.Getenv("RAILWAY_PROJECT_ID") != ""
+	inRelease := strings.EqualFold(os.Getenv("GIN_MODE"), "release")
+	if !onRailway && !inRelease {
+		return nil
+	}
+	return fmt.Errorf(
+		"DATABASE_URL points at %s — use your hosted Postgres URL, not localhost. "+
+			"On Railway: add a Postgres plugin, delete any manual DATABASE_URL copied from .env.example, "+
+			"then set DATABASE_URL to the plugin variable reference (e.g. ${{Postgres.DATABASE_URL}}). "+
+			"See docs/RAILWAY.md",
+		host,
+	)
 }
 
 func intEnv(key string, fallback int32) int32 {

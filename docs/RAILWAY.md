@@ -14,23 +14,57 @@ If the service is wired to `IAG_multi_backend` instead, set **Root directory** t
 
 `services/operations/fleet`
 
+## Postgres (fix “connection refused” on 127.0.0.1:5432)
+
+That error means `DATABASE_URL` still points at **localhost** (usually copied from `.env.example`):
+
+```text
+postgres://iag:iag_dev@localhost:5432/iag_fleet?sslmode=disable
+```
+
+Inside Railway there is no Postgres on `127.0.0.1` — you need the **Railway Postgres** hostname.
+
+### Steps
+
+1. In your Railway **project**, click **+ New** → **Database** → **PostgreSQL** (if you do not already have one).
+2. Open the **fleet** service → **Variables**.
+3. **Remove** any hand-typed `DATABASE_URL` that contains `localhost` or `127.0.0.1`.
+4. Add a variable reference from the Postgres service:
+   - Click **+ New Variable** → **Add Reference** → choose your Postgres service → **`DATABASE_URL`**.
+   - Railway sets something like  
+     `postgresql://postgres:…@monorail.proxy.rlwy.net:12345/railway`
+5. Optional: use database name `iag_fleet` instead of `railway`:
+   - Connect to Postgres (Railway **Data** tab or `psql` with the plugin URL) and run:
+     ```sql
+     CREATE DATABASE iag_fleet;
+     ```
+   - Edit the fleet `DATABASE_URL` so the path is `/iag_fleet` (same user/password/host/port as the plugin URL).
+   - Or keep the default `railway` database — migrations work on whatever name is in the URL.
+6. Set `AUTO_MIGRATE=true` on first deploy so schema is created.
+7. Redeploy the fleet service.
+
+The API also needs non-local URLs for auth/notifications when integrated; see `config/.env.production.example`.
+
+## Other required variables
+
+| Variable | Notes |
+|----------|--------|
+| `DATABASE_URL` | From Postgres plugin (see above) — **not** localhost |
+| `AUTO_MIGRATE` | `true` on first deploy |
+| `GATEWAY_INTERNAL_SECRET` | ≥16 chars |
+| `JWKS_URL`, `JWT_ISSUER` | Your auth service |
+| `AUTH_MODE` | `gateway` (default in Dockerfile) |
+| `CORS_ORIGIN`, `PUBLIC_API_URL` | Your frontend / gateway URLs |
+
+`REDIS_URL` and Kafka are optional; the API starts without them.
+
 ## Commits not triggering builds?
 
-1. **Settings → Source** — confirm repo/branch match `iag-fleet` / `main`.
-2. **Settings → Build** — builder should be **Dockerfile** (or use `railway.toml` in this repo).
-3. **Settings → Deploy** — enable **Deploy on push** / watch branch `main`.
-4. **Deployments** → **Redeploy** → pick commit `7f7d0f3` or latest `main` manually.
-5. Reconnect GitHub: disconnect and re-link the repo if webhooks are stale.
-
-## Required environment variables
-
-See `config/.env.production.example`. Minimum:
-
-- `DATABASE_URL` (Postgres plugin or external)
-- `REDIS_URL` (optional but recommended for seed cache + notifications)
-- `JWT_SECRET` (≥32 chars) if using local JWT mode, or gateway vars if behind platform auth
-- `GATEWAY_INTERNAL_SECRET`, `AUTH_MODE=gateway`, `JWKS_URL`, `JWT_ISSUER` for production gateway auth
+1. **Settings → Source** — repo `iag-fleet`, branch `main`, root `/`.
+2. **Settings → Deploy** — enable deploy on push.
+3. **Deployments → Redeploy** — pick latest `main`.
+4. Reconnect GitHub if webhooks are stale after a force-push.
 
 ## Health check
 
-Railway should probe `GET /ready` (configured in `railway.toml`).
+Railway probes `GET /ready` (`railway.toml`).
