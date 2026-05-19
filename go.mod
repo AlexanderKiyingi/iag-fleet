@@ -9,11 +9,10 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/segmentio/kafka-go v0.4.47
-	golang.org/x/crypto v0.50.0
 	golang.org/x/time v0.15.0
 )
 
-replace github.com/alvor-technologies/iag-authclient => ../../../shared/go/authclient
+replace github.com/alvor-technologies/iag-authclient => ./pkg/authclient
 
 require (
 	github.com/bytedance/sonic v1.11.6 // indirect
@@ -46,6 +45,7 @@ require (
 	github.com/ugorji/go/codec v1.2.12 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
+	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect

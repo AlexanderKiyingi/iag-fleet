@@ -16,7 +16,9 @@ WORKDIR /src
 # local Docker, Railway, Depot, etc. To restore caching, replace
 # `id=haula-gomod` / `id=haula-gobuild` below with your service-specific
 # values, e.g. `id=s/abc123-haula-gomod`.
+# Local replace for iag-authclient (pkg/authclient) must exist before go mod download.
 COPY go.mod go.sum ./
+COPY pkg/authclient ./pkg/authclient
 RUN go mod download
 
 COPY . .
