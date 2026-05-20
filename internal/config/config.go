@@ -33,7 +33,7 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Addr:             envOr("ADDR", envOr("HTTP_PORT", ":4008")),
+		Addr:             ListenAddr(),
 		AuthMode:         authMode,
 		GatewaySecret:    strings.TrimSpace(os.Getenv("GATEWAY_INTERNAL_SECRET")),
 		JWTIssuer:        envOr("JWT_ISSUER", "http://localhost:3001"),
@@ -55,10 +55,6 @@ func Load() (Config, error) {
 	}
 	if cfg.EventBusEnabled && len(cfg.KafkaBrokers) == 0 {
 		cfg.KafkaBrokers = []string{"127.0.0.1:19092"}
-	}
-
-	if !strings.HasPrefix(cfg.Addr, ":") && !strings.Contains(cfg.Addr, ":") {
-		cfg.Addr = ":" + cfg.Addr
 	}
 
 	if cfg.AuthMode == "gateway" && cfg.GatewaySecret == "" {

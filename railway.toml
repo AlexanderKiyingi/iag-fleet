@@ -10,3 +10,6 @@ healthcheckPath = "/ready"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+
+# Railway probes the PORT variable (not ADDR). Keep PORT=4008 in service variables
+# or rely on Dockerfile ENV PORT=4008 so healthchecks hit the API listener.

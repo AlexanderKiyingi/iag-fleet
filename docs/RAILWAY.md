@@ -43,6 +43,17 @@ Inside Railway there is no Postgres on `127.0.0.1` — you need the **Railway Po
 
 The API also needs non-local URLs for auth/notifications when integrated; see `config/.env.production.example`.
 
+## Port and health checks
+
+Railway routes traffic and runs health checks against the **`PORT`** variable, not `ADDR`.
+
+| Variable | Notes |
+|----------|--------|
+| `PORT` | Set to **`4008`** in the fleet service variables (or use the Dockerfile default). The API and `/ready` probe listen on this port. |
+| `ADDR` | Optional override for local/docker-compose (`:4008`). Ignored when `PORT` is set. |
+
+Do **not** leave `ADDR=:4008` in Railway while `PORT` points at another port — health checks will fail with “service unavailable”.
+
 ## Other required variables
 
 | Variable | Notes |
