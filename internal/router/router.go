@@ -71,16 +71,16 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 		c.Next()
 	})
 
-	if opts.PlatformAuth != nil {
-		r.Use(opts.PlatformAuth.AttachPrincipal())
-	}
-
 	health := func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	}
 	r.GET("/healthz", health)
 	r.GET("/health", health)
 	r.GET("/ready", health)
+
+	if opts.PlatformAuth != nil {
+		r.Use(opts.PlatformAuth.AttachPrincipal())
+	}
 
 	api := r.Group("/api")
 

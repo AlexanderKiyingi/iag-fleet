@@ -44,10 +44,24 @@ func NewPlatformAuth(opts PlatformAuthOptions) *PlatformAuth {
 	}
 }
 
+func isPublicProbePath(path string) bool {
+	switch path {
+	case "/health", "/healthz", "/ready":
+		return true
+	default:
+		return false
+	}
+}
+
 // AttachPrincipal resolves the caller on protected routes. Anonymous requests
 // still pass through; handlers use auth.RequireUser / RequirePerm.
+// Probe paths (/ready, /health) skip gateway secret checks for load balancers.
 func (m *PlatformAuth) AttachPrincipal() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if isPublicProbePath(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
 		switch m.authMode {
 		case "gateway":
 			m.fromGateway(c)

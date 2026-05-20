@@ -76,4 +76,4 @@ Do **not** leave `ADDR=:4008` in Railway while `PORT` points at another port —
 
 ## Health check
 
-Railway probes `GET /ready` (`railway.toml`).
+Railway probes `GET /ready` (`railway.toml`). Probes are **unauthenticated** — do not require `X-IAG-Gateway-Secret`. A `401` on `/ready` means an old build is running; redeploy after the gateway probe bypass fix.
