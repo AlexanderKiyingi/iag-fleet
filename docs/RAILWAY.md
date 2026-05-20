@@ -19,7 +19,7 @@ If the service is wired to `IAG_multi_backend` instead, set **Root directory** t
 That error means `DATABASE_URL` still points at **localhost** (usually copied from `.env.example`):
 
 ```text
-postgres://iag:iag_dev@localhost:5432/iag_fleet?sslmode=disable
+postgres://svc_iag_fleet:iag_fleet_dev@localhost:5432/iag_platform?sslmode=disable
 ```
 
 Inside Railway there is no Postgres on `127.0.0.1` — you need the **Railway Postgres** hostname.
@@ -33,13 +33,11 @@ Inside Railway there is no Postgres on `127.0.0.1` — you need the **Railway Po
    - Click **+ New Variable** → **Add Reference** → choose your Postgres service → **`DATABASE_URL`**.
    - Railway sets something like  
      `postgresql://postgres:…@monorail.proxy.rlwy.net:12345/railway`
-5. Optional: use database name `iag_fleet` instead of `railway`:
-   - Connect to Postgres (Railway **Data** tab or `psql` with the plugin URL) and run:
-     ```sql
-     CREATE DATABASE iag_fleet;
-     ```
-   - Edit the fleet `DATABASE_URL` so the path is `/iag_fleet` (same user/password/host/port as the plugin URL).
-   - Or keep the default `railway` database — migrations work on whatever name is in the URL.
+5. On a shared Postgres instance, use database `iag_platform` (or Railway’s default `railway`) and role `svc_iag_fleet`:
+   ```text
+   postgresql://svc_iag_fleet:PASSWORD@HOST:PORT/railway?sslmode=require
+   ```
+   Bootstrap once: `deploy/postgres/init/01-schemas.sql` + `02-service-roles.sh` (role owns `iag_fleet` schema).
 6. Set `AUTO_MIGRATE=true` on first deploy so schema is created.
 7. Redeploy the fleet service.
 
