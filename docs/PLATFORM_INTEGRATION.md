@@ -9,7 +9,7 @@ Fleet is a domain microservice behind the **API gateway**, using **iag-authentic
 | **iag-authentication** | Users, groups, `fleet.*` permissions | Gateway JWT → `X-IAG-*` headers; optional direct JWKS in `AUTH_MODE=jwt` |
 | **iag-api-gateway** | Public ingress | Clients call `PUBLIC_API_URL/api/v1/fleet/api/...` |
 | **iag-notifications** | Critical email alerts | Kafka `iag.notifications` → `notification.requested` (`fleet.alert` template) |
-| **iag-accounts** | Fuel purchase ledger | Kafka `iag.finance` → `fleet.fuel.recorded` on fuel record create/update |
+| **iag-finance** | Fuel purchase ledger | Kafka `iag.finance` → `fleet.fuel.recorded` on fuel record create/update |
 
 ## Auth modes
 
@@ -28,7 +28,7 @@ Fleet is a domain microservice behind the **API gateway**, using **iag-authentic
 | `GATEWAY_API_PREFIX` | `/api/v1/fleet` |
 | `AUTHENTICATION_URL` | Health probe + docs, e.g. `http://authentication:3001` |
 | `NOTIFICATIONS_URL` | Health probe, e.g. `http://notifications:3002` |
-| `ACCOUNTS_URL` | Health probe, e.g. `http://accounts:3005` |
+| `FINANCE_URL` | Optional health probe, e.g. `http://finance:3006` |
 | `EVENT_BUS_ENABLED` | `true` to publish Kafka events |
 | `KAFKA_BROKERS` | e.g. `redpanda:9092` |
 | `FLEET_FUEL_CURRENCY` | Currency for `fleet.fuel.recorded` (default `UGX`) |
@@ -61,7 +61,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/fleet/api/pl
 |-------|-------------|
 | `iag.fleet` | `fleet.jmp.completed`, `fleet.telemetry.refuel_detected`, … |
 | `iag.notifications` | `notification.requested` |
-| `iag.finance` | `fleet.fuel.recorded` (accounts consumer books journal entries) |
+| `iag.finance` | `fleet.fuel.recorded` (finance consumer books journal entries) |
 
 ## In-app notifications
 

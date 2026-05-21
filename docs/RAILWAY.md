@@ -38,7 +38,7 @@ Inside Railway there is no Postgres on `127.0.0.1` — you need the **Railway Po
    postgresql://svc_iag_fleet:PASSWORD@HOST:PORT/railway?sslmode=require
    ```
    Bootstrap once: `deploy/postgres/init/01-schemas.sql` + `02-service-roles.sh` (role owns `iag_fleet` schema).
-6. Set `AUTO_MIGRATE=true` on first deploy so schema is created.
+6. Leave `AUTO_MIGRATE=true` (default) so pending migrations apply on each deploy.
 7. Redeploy the fleet service.
 
 The API also needs non-local URLs for auth/notifications when integrated; see `config/.env.production.example`.
@@ -59,7 +59,7 @@ Do **not** leave `ADDR=:4008` in Railway while `PORT` points at another port —
 | Variable | Notes |
 |----------|--------|
 | `DATABASE_URL` | From Postgres plugin (see above) — **not** localhost |
-| `AUTO_MIGRATE` | `true` on first deploy |
+| `AUTO_MIGRATE` | `true` (default; applies pending migrations each deploy) |
 | `GATEWAY_INTERNAL_SECRET` | ≥16 chars |
 | `JWKS_URL`, `JWT_ISSUER` | Your auth service |
 | `AUTH_MODE` | `gateway` (default in Dockerfile) |
