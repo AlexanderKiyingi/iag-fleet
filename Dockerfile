@@ -13,7 +13,7 @@ ENV FLEET_IOT_DEP=/deps/fleet-iot
 
 FROM base AS fleet-iot-clone
 ARG FLEET_IOT_REF=main
-ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/Fleet_IoT.git
+ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --depth 1 --branch "${FLEET_IOT_REF}" "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}"
 
 FROM base AS fleet-iot-copy
