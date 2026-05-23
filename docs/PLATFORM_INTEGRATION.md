@@ -2,6 +2,8 @@
 
 Fleet is a domain microservice behind the **API gateway**, using **iag-authentication** for IAM, **iag-notifications** for outbound email/SMS, and **iag-accounts** for fuel expense ledger entries.
 
+**Telemetry ingest** runs in **Fleet_IoT** (`edge/Fleet_IoT`): HTTP `:4080/v1/pings` and Teltonika TCP `:5027`, writing to the **`telemetry_timeseries`** Timescale hypertable. Fleet keeps device registry, track replay, fuel analytics, and aggregation jobs.
+
 ## Services
 
 | Service | Integration | Mechanism |

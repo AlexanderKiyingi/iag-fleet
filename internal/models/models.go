@@ -214,6 +214,7 @@ type FuelRecord struct {
 	AnomalyType    string         `json:"anomalyType,omitempty"    db:"anomaly_type"`
 	AnomalyStatus  string         `json:"anomalyStatus,omitempty"  db:"anomaly_status"`
 	AnomalyHistory AnomalyHistory `json:"anomalyHistory"           db:"anomaly_history"`
+	FuelEventID    *int64         `json:"fuelEventId,omitempty"    db:"fuel_event_id"`
 }
 
 func (f FuelRecord) GetID() string    { return f.ID }
@@ -257,6 +258,7 @@ type MaintenanceItem struct {
 	Notes          string               `json:"notes,omitempty"     db:"notes"`
 	PartsBreakdown MaintenancePartLines `json:"partsBreakdown"      db:"parts_breakdown"`
 	StatusHistory  StatusHistory        `json:"statusHistory"       db:"status_history"`
+	PmScheduleID   string               `json:"pmScheduleId,omitempty" db:"pm_schedule_id"`
 }
 
 func (m MaintenanceItem) GetID() string    { return m.ID }
@@ -477,3 +479,87 @@ type OperatorTicker struct {
 	Operator string  `json:"operator"`
 	Role     string  `json:"role"`
 }
+
+// ─── Inspections (DVIR) ────────────────────────────────────────────────────
+
+type InspectionChecklistItem struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Category string `json:"category,omitempty"`
+	Required bool   `json:"required"`
+}
+
+type InspectionChecklist []InspectionChecklistItem
+
+type InspectionTemplate struct {
+	ID        string              `json:"id"              db:"id"`
+	Name      string              `json:"name"            db:"name"`
+	Kind      string              `json:"kind"            db:"kind"`
+	Checklist InspectionChecklist `json:"checklist"       db:"checklist"`
+	Active    bool                `json:"active"          db:"active"`
+	Notes     string              `json:"notes,omitempty" db:"notes"`
+	CreatedAt string              `json:"createdAt"       db:"created_at" dbcast:"timestamptz"`
+}
+
+func (t InspectionTemplate) GetID() string    { return t.ID }
+func (t *InspectionTemplate) SetID(id string) { t.ID = id }
+
+type InspectionResultItem struct {
+	ItemID string `json:"itemId"`
+	Status string `json:"status"` // pass | fail | na
+	Note   string `json:"note,omitempty"`
+}
+
+type InspectionResults []InspectionResultItem
+
+type InspectionDefect struct {
+	ItemID      string `json:"itemId"`
+	Description string `json:"description"`
+	Severity    string `json:"severity,omitempty"` // minor | major | critical
+}
+
+type InspectionDefects []InspectionDefect
+
+type VehicleInspection struct {
+	ID            string              `json:"id"                      db:"id"`
+	TemplateID    string              `json:"templateId"              db:"template_id"`
+	VehicleID     string              `json:"vehicleId"               db:"vehicle_id"`
+	DriverID      string              `json:"driverId,omitempty"      db:"driver_id"`
+	Kind          string              `json:"kind"                    db:"kind"`
+	Status        string              `json:"status"                  db:"status"`
+	Odo           float64             `json:"odo"                     db:"odo"`
+	Location      string              `json:"location,omitempty"      db:"location"`
+	Results       InspectionResults   `json:"results"                 db:"results"`
+	Defects       InspectionDefects   `json:"defects"                 db:"defects"`
+	Signature     string              `json:"signature,omitempty"     db:"signature"`
+	SubmittedAt   string              `json:"submittedAt,omitempty"   db:"submitted_at" dbcast:"timestamptz"`
+	SubmittedBy   string              `json:"submittedBy,omitempty"   db:"submitted_by"`
+	MaintenanceID string              `json:"maintenanceId,omitempty" db:"maintenance_id"`
+	Notes         string              `json:"notes,omitempty"         db:"notes"`
+}
+
+func (v VehicleInspection) GetID() string    { return v.ID }
+func (v *VehicleInspection) SetID(id string) { v.ID = id }
+
+// ─── Preventive maintenance schedules ─────────────────────────────────────
+
+type PMSchedule struct {
+	ID                 string   `json:"id"                           db:"id"`
+	VehicleID          string   `json:"vehicleId,omitempty"          db:"vehicle_id"`
+	Name               string   `json:"name"                         db:"name"`
+	ServiceType        string   `json:"serviceType"                  db:"service_type"`
+	ServiceDescription string   `json:"serviceDescription"           db:"service_description"`
+	IntervalKm         *float64 `json:"intervalKm,omitempty"       db:"interval_km"`
+	IntervalDays       *int     `json:"intervalDays,omitempty"     db:"interval_days"`
+	LastServiceOdo     *float64 `json:"lastServiceOdo,omitempty"   db:"last_service_odo"`
+	LastServiceDate    string   `json:"lastServiceDate,omitempty"  db:"last_service_date" dbcast:"date"`
+	NextDueKm          *float64 `json:"nextDueKm,omitempty"        db:"next_due_km"`
+	NextDueDate        string   `json:"nextDueDate,omitempty"      db:"next_due_date" dbcast:"date"`
+	Vendor             string   `json:"vendor,omitempty"           db:"vendor"`
+	AutoCreateWO       bool     `json:"autoCreateWo"               db:"auto_create_wo"`
+	Active             bool     `json:"active"                     db:"active"`
+	Notes              string   `json:"notes,omitempty"            db:"notes"`
+}
+
+func (p PMSchedule) GetID() string    { return p.ID }
+func (p *PMSchedule) SetID(id string) { p.ID = id }

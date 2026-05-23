@@ -13,7 +13,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/handlers"
-	"github.com/iag/fleet-tool/backend/internal/iot"
+	"github.com/iag/fleet-iot/iot"
 	fleetmw "github.com/iag/fleet-tool/backend/internal/middleware"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/platform"
@@ -28,7 +28,7 @@ type Options struct {
 	AuthMode      string
 	PlatformAuth  *fleetmw.PlatformAuth
 	IoTStore      *iot.Store
-	IoTBroker     *iot.Broker
+	IoTHub        *iot.Hub
 	// RoutingOSRMURL is the origin of an OSRM-compatible service, e.g. https://router.project-osrm.org
 	// (no /route suffix). Empty = plan API still works using straight-line fallback only.
 	RoutingOSRMURL string
@@ -91,9 +91,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// small dispatcher (gin doesn't let us reassign middleware after a
 	// handler is registered, so we declare a tier middleware that picks
 	// the right limiter by path).
-	r.Use(perRouteRateLimits(map[string]gin.HandlerFunc{
-		"/api/iot/pings": security.RateLimit(120, 30, security.ByIP),
-	}, security.RateLimit(300, 60, security.ByIP)))
+	r.Use(perRouteRateLimits(map[string]gin.HandlerFunc{}, security.RateLimit(300, 60, security.ByIP)))
 
 	(&handlers.Platform{Repo: repo}).Register(api)
 	(&handlers.PlatformStatus{Services: opts.Platform, AuthMode: opts.AuthMode}).Register(api)
@@ -162,11 +160,13 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	(&handlers.Admin{Repo: repo, Cache: opts.Cache}).Register(api)
 	(&handlers.Reference{Cache: opts.Cache, TTL: opts.TTLReference}).Register(api)
 	(&handlers.Workflows{Repo: repo, Events: opts.Events}).Register(api)
+	(&handlers.Inspections{Repo: repo}).Register(api)
+	(&handlers.PMSchedules{Repo: repo}).Register(api)
 	(&handlers.Dashboard{Repo: repo, Cache: opts.Cache, TTL: opts.TTLDashboard}).Register(api)
 	(&handlers.Analytics{Repo: repo, Cache: opts.Cache, TTL: opts.TTLAnalytics}).Register(api)
 	(&handlers.Reports{Repo: repo}).Register(api)
 	(&handlers.Calendar{Repo: repo}).Register(api)
-	(&handlers.FleetLive{Repo: repo}).Register(api)
+	(&handlers.FleetLive{Repo: repo, Hub: opts.IoTHub}).Register(api)
 
 	// Notifications. Always register so the route table matches the
 	// frontend's expectations even if the producer ticker isn't started
@@ -182,7 +182,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// Always attach IoT routes so the route table matches the Next.js client
 	// even if a test harness omits a store — handlers return 503 when
 	// telemetry is not configured instead of 404-no-route.
-	(&handlers.IoT{Store: opts.IoTStore, Broker: opts.IoTBroker, Repo: repo}).Register(api)
+	(&handlers.IoT{Store: opts.IoTStore, Hub: opts.IoTHub, Repo: repo}).Register(api)
 
 	return r
 }

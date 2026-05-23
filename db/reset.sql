@@ -5,6 +5,7 @@ BEGIN;
 
 DROP TABLE IF EXISTS fuel_events            CASCADE;
 DROP TABLE IF EXISTS telemetry_daily        CASCADE;
+DROP TABLE IF EXISTS telemetry_timeseries   CASCADE;
 DROP TABLE IF EXISTS telemetry_pings        CASCADE;
 DROP TABLE IF EXISTS iot_devices            CASCADE;
 DROP TABLE IF EXISTS notifications            CASCADE;

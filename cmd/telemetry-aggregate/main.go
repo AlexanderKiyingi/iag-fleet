@@ -18,7 +18,7 @@ import (
 
 	"github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-tool/backend/internal/iot"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/jobs"
 )
 
@@ -50,7 +50,7 @@ func main() {
 	eventBus := events.NewFromEnv()
 	defer func() { _ = eventBus.Close() }()
 
-	written, eventsWritten, failed, err := jobs.AggregateTelemetry(ctx, store, eventBus, from, to, *vehicleFlag)
+	written, eventsWritten, failed, err := jobs.AggregateTelemetry(ctx, store, eventBus, pool, from, to, *vehicleFlag)
 	if err != nil {
 		log.Fatalf("aggregate: %v", err)
 	}

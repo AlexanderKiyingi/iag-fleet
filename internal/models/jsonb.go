@@ -170,6 +170,54 @@ func (h AnomalyHistory) Value() (driver.Value, error) {
 	return json.Marshal(h)
 }
 
+func (c *InspectionChecklist) Scan(src any) error {
+	b, err := jsonbBytes(src)
+	if err != nil || b == nil {
+		*c = nil
+		return err
+	}
+	return json.Unmarshal(b, c)
+}
+
+func (c InspectionChecklist) Value() (driver.Value, error) {
+	if c == nil {
+		return []byte(`[]`), nil
+	}
+	return json.Marshal(c)
+}
+
+func (r *InspectionResults) Scan(src any) error {
+	b, err := jsonbBytes(src)
+	if err != nil || b == nil {
+		*r = nil
+		return err
+	}
+	return json.Unmarshal(b, r)
+}
+
+func (r InspectionResults) Value() (driver.Value, error) {
+	if r == nil {
+		return []byte(`[]`), nil
+	}
+	return json.Marshal(r)
+}
+
+func (d *InspectionDefects) Scan(src any) error {
+	b, err := jsonbBytes(src)
+	if err != nil || b == nil {
+		*d = nil
+		return err
+	}
+	return json.Unmarshal(b, d)
+}
+
+func (d InspectionDefects) Value() (driver.Value, error) {
+	if d == nil {
+		return []byte(`[]`), nil
+	}
+	return json.Marshal(d)
+}
+
 // jsonbBytes normalizes the various concrete types pgx can hand to Scan
 // for a JSONB column ([]byte, string, or nil).
 func jsonbBytes(src any) ([]byte, error) {

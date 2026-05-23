@@ -36,6 +36,10 @@ type Repository struct {
 	Tasks       *Collection[models.TaskItem, *models.TaskItem]
 	Deployment  *Collection[models.DeploymentDay, *models.DeploymentDay]
 
+	InspectionTemplates *Collection[models.InspectionTemplate, *models.InspectionTemplate]
+	Inspections         *Collection[models.VehicleInspection, *models.VehicleInspection]
+	PMSchedules         *Collection[models.PMSchedule, *models.PMSchedule]
+
 	// Notifications is the per-user signal log surfaced by the bell.
 	// Doesn't follow the generic Collection pattern because every read /
 	// write is implicitly user-scoped.
@@ -61,6 +65,10 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 		Requests:    NewCollection[models.ServiceRequest, *models.ServiceRequest](pool, "service_requests"),
 		Tasks:       NewCollection[models.TaskItem, *models.TaskItem](pool, "task_items"),
 		Deployment:  NewCollection[models.DeploymentDay, *models.DeploymentDay](pool, "deployment_days"),
+
+		InspectionTemplates: NewCollection[models.InspectionTemplate, *models.InspectionTemplate](pool, "inspection_templates"),
+		Inspections:         NewCollection[models.VehicleInspection, *models.VehicleInspection](pool, "vehicle_inspections"),
+		PMSchedules:         NewCollection[models.PMSchedule, *models.PMSchedule](pool, "pm_schedules"),
 
 		Notifications: &NotificationsStore{pool: pool},
 	}

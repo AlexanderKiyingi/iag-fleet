@@ -4,6 +4,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+# Final Dockerfile stage is `standalone` (clones Fleet_IoT). Monorepo Compose uses --target monorepo.
 
 [deploy]
 healthcheckPath = "/ready"

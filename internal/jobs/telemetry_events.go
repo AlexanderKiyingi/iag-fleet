@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-tool/backend/internal/iot"
+	"github.com/iag/fleet-iot/iot"
 )
 
 func publishTelemetryFuelEvents(ctx context.Context, bus *events.Bus, fuelEvents []iot.FuelEvent) {

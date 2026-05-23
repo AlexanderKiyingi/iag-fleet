@@ -3,11 +3,13 @@ package handlers
 import (
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	fueldetect "github.com/iag/fleet-tool/backend/internal/fuel"
+	"github.com/iag/fleet-tool/backend/internal/jobs"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -49,6 +51,7 @@ func (f *FuelRecords) Register(rg *gin.RouterGroup, base string) {
 	g.DELETE("/bulk", del, f.inner.bulkDelete)
 
 	g.POST("/:id/anomaly-event", change, f.anomalyEvent)
+	g.POST("/link-events", change, f.linkEvents)
 }
 
 func (f *FuelRecords) create(c *gin.Context) {
@@ -68,7 +71,22 @@ func (f *FuelRecords) create(c *gin.Context) {
 	}
 	f.inner.Repo.LogBest(c.Request.Context(), "create", f.inner.Entity, created.ID, "", currentUser(c, f.inner.Repo))
 	f.publishFuel(c, created)
+	if n, err := jobs.LinkFuelEvents(c.Request.Context(), f.inner.Repo.Pool(), 30); err == nil && n > 0 {
+		if refreshed, err := f.inner.Collection.Get(c.Request.Context(), created.ID); err == nil {
+			created = refreshed
+		}
+	}
 	c.JSON(http.StatusCreated, created)
+}
+
+func (f *FuelRecords) linkEvents(c *gin.Context) {
+	lookback, _ := strconv.Atoi(c.DefaultQuery("lookbackDays", "90"))
+	linked, err := jobs.LinkFuelEvents(c.Request.Context(), f.inner.Repo.Pool(), lookback)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"linked": linked})
 }
 
 func (f *FuelRecords) patch(c *gin.Context) {

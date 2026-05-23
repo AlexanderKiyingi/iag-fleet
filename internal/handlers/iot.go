@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
-	"github.com/iag/fleet-tool/backend/internal/iot"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
 
@@ -27,8 +27,7 @@ import (
 //	  DELETE /api/iot/devices/:id
 //	  POST   /api/iot/devices/:id/rotate-key
 //
-//	Ingestion (device-authenticated via Authorization: Bearer <key>)
-//	  POST   /api/iot/pings                 [ { ts, lat, lng, ... }, ... ]
+//	HTTP ingestion runs on Fleet_IoT (see GET /api/iot/ingestion).
 //
 //	Replay / live (perm: view_telemetry on GPS/track endpoints)
 //	  GET    /api/vehicles/:id/track?from=&to=&limit=
@@ -40,7 +39,7 @@ import (
 //	  manual fuel data but still need IoT-driven charts on vehicle pages.
 type IoT struct {
 	Store  *iot.Store
-	Broker *iot.Broker
+	Hub *iot.Hub
 	Repo   *store.Repository // optional: vehicle validation + list enrichment; nil in tests
 }
 
@@ -69,9 +68,6 @@ func (h *IoT) Register(rg *gin.RouterGroup) {
 
 	// Operator-facing ingestion contract (URLs + limits + sample JSON) for relays and scripts.
 	rg.GET("/iot/ingestion", auth.RequirePerm("manage_iot_device"), h.requireStore, h.ingestionGuide)
-
-	// Ingestion authenticates the device by API key, not by user session.
-	rg.POST("/iot/pings", h.requireStore, h.ingestPings)
 
 	rg.GET("/vehicles/:id/track", auth.RequirePerm("view_telemetry"), h.requireStore, h.track)
 	rg.GET("/vehicles/:id/track/latest", auth.RequirePerm("view_telemetry"), h.requireStore, h.latest)
@@ -237,19 +233,25 @@ func (h *IoT) rotateKey(c *gin.Context) {
 
 // ingestionGuide documents how HTTP relays authenticate and POST pings (operator-only).
 func (h *IoT) ingestionGuide(c *gin.Context) {
+	ingestBase := strings.TrimRight(os.Getenv("TELEMETRY_INGEST_URL"), "/")
+	if ingestBase == "" {
+		ingestBase = "http://fleet-iot-ingest:4080"
+	}
 	c.JSON(http.StatusOK, gin.H{
+		"service": "Fleet_IoT",
 		"http": gin.H{
-			"method":       "POST",
-			"path":         "/api/iot/pings",
-			"contentType":  "application/json",
+			"method":      "POST",
+			"url":         ingestBase + "/v1/pings",
+			"legacyPath":  ingestBase + "/api/iot/pings",
+			"contentType": "application/json",
 			"authorization": gin.H{
 				"scheme": "Bearer",
 				"hint":   "Plaintext API key issued on device create or rotate-key; only the SHA-256 digest is stored.",
 			},
-			"maxBatch": maxIngestBatch,
+			"maxBatch": iot.MaxIngestBatch,
 			"bodyShape": gin.H{
-				"single":  "object or array of objects",
-				"vehicleId": "optional when the device row has a default vehicle binding (required otherwise)",
+				"single":         "object or array of objects",
+				"vehicleId":      "optional when the device row has a default vehicle binding (required otherwise)",
 				"requiredFields": []string{"lat", "lng"},
 				"optionalFields": []string{"ts", "altitude", "heading", "speedKmh", "satellites", "odo", "fuelLevel", "ignition", "eventId", "raw"},
 			},
@@ -261,7 +263,7 @@ func (h *IoT) ingestionGuide(c *gin.Context) {
 		},
 		"tcp": gin.H{
 			"binary":     "Teltonika Codec 8 / 8E",
-			"listener":   "cmd/iot-gateway (default :5027)",
+			"listener":   "Fleet_IoT TCP gateway (default :5027)",
 			"identifier": "IMEI must match iot_devices.serial; no bearer token on wire.",
 		},
 	})
@@ -316,8 +318,8 @@ func (h *IoT) testPing(c *gin.Context) {
 		return
 	}
 	_ = h.Store.MarkSeen(ctx, devID, c.ClientIP())
-	if h.Broker != nil {
-		h.Broker.Publish(p)
+	if h.Hub != nil {
+		h.Hub.Publish(p)
 	}
 	latest, err := h.Store.LatestPing(ctx, d.VehicleID)
 	if err != nil {
@@ -356,139 +358,6 @@ func respondVehicleOr500(c *gin.Context, err error) {
 	}
 }
 
-// ─────────────────────────── Ingestion ──────────────────────────
-
-type ingestPingBody struct {
-	VehicleID  string          `json:"vehicleId"`
-	TS         time.Time       `json:"ts"`
-	Lat        float64         `json:"lat" binding:"required"`
-	Lng        float64         `json:"lng" binding:"required"`
-	Altitude   *float64        `json:"altitude"`
-	Heading    *float64        `json:"heading"`
-	SpeedKmh   *float64        `json:"speedKmh"`
-	Satellites *int            `json:"satellites"`
-	Odo        *float64        `json:"odo"`
-	FuelLevel  *float64        `json:"fuelLevel"`
-	Ignition   *bool           `json:"ignition"`
-	EventID    *int            `json:"eventId"`
-	Raw        json.RawMessage `json:"raw"`
-}
-
-const maxIngestBatch = 1000
-
-// ingestPings accepts an array of pings (or a single object) from a device
-// or relay. Authenticates via Authorization: Bearer <api-key>; the device's
-// vehicle binding is used as a default when the body omits vehicleId.
-func (h *IoT) ingestPings(c *gin.Context) {
-	apiKey := bearerToken(c)
-	if apiKey == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing Authorization: Bearer <api-key>"})
-		return
-	}
-	device, err := h.Store.AuthenticateAPIKey(c.Request.Context(), apiKey)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid device api key"})
-		return
-	}
-
-	body, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Accept either a JSON array or a single JSON object — both shapes are
-	// common in IoT relays. Unmarshal into the array shape.
-	body = []byte(strings.TrimSpace(string(body)))
-	if len(body) > 0 && body[0] == '{' {
-		body = []byte("[" + string(body) + "]")
-	}
-
-	var batch []ingestPingBody
-	if err := json.Unmarshal(body, &batch); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("malformed body: %v", err)})
-		return
-	}
-	if len(batch) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "empty batch"})
-		return
-	}
-	if len(batch) > maxIngestBatch {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "batch exceeds 1000 pings"})
-		return
-	}
-
-	now := time.Now().UTC()
-	pings := make([]iot.Ping, 0, len(batch))
-	for _, b := range batch {
-		vehicleID := b.VehicleID
-		if vehicleID == "" {
-			vehicleID = device.VehicleID
-		}
-		if vehicleID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "vehicleId required (device has no default binding)"})
-			return
-		}
-		if b.Lat < -90 || b.Lat > 90 || b.Lng < -180 || b.Lng > 180 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid coordinates"})
-			return
-		}
-		ts := b.TS
-		if ts.IsZero() {
-			ts = now
-		} else {
-			if ts.Before(now.Add(-24 * time.Hour)) {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "timestamp too old"})
-				return
-			}
-			if ts.After(now.Add(5 * time.Minute)) {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "timestamp in the future"})
-				return
-			}
-		}
-		raw := b.Raw
-		if len(raw) == 0 {
-			raw = json.RawMessage(`{}`)
-		}
-		devID := device.ID
-		pings = append(pings, iot.Ping{
-			VehicleID:  vehicleID,
-			DeviceID:   &devID,
-			TS:         ts,
-			Lat:        b.Lat,
-			Lng:        b.Lng,
-			Altitude:   b.Altitude,
-			Heading:    b.Heading,
-			SpeedKmh:   b.SpeedKmh,
-			Satellites: b.Satellites,
-			Odo:        b.Odo,
-			FuelLevel:  b.FuelLevel,
-			Ignition:   b.Ignition,
-			EventID:    b.EventID,
-			Raw:        raw,
-		})
-	}
-
-	n, err := h.Store.InsertPings(c.Request.Context(), pings)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	// Sync vehicle hot-state from the newest ping in the batch.
-	if newest := newestPing(pings); newest != nil && newest.VehicleID != "" {
-		_ = h.Store.SyncVehicleFromPing(c.Request.Context(), *newest)
-	}
-	_ = h.Store.MarkSeen(c.Request.Context(), device.ID, c.ClientIP())
-
-	// Fan out to in-process SSE subscribers.
-	if h.Broker != nil {
-		for _, p := range pings {
-			h.Broker.Publish(p)
-		}
-	}
-	c.JSON(http.StatusAccepted, gin.H{"accepted": n})
-}
-
 // ─────────────────────────── Replay / live ──────────────────────────
 
 func (h *IoT) latest(c *gin.Context) {
@@ -505,17 +374,13 @@ func (h *IoT) latest(c *gin.Context) {
 	c.JSON(http.StatusOK, p)
 }
 
-// Raw ping replay can scan telemetry_pings at high frequency — keep a
-// tighter window than fuel aggregates. The Next.js map trail uses 24h.
-const maxTrackReplayRange = 14 * 24 * time.Hour
-
 // Fuel history / events / summary + fleet-wide anomalies align with the
 // HAULA UI (30-day presets on fuel + vehicle telemetry tabs).
 const maxFuelTelemetryRange = 31 * 24 * time.Hour
 
 func (h *IoT) track(c *gin.Context) {
 	id := c.Param("id")
-	from, to, err := parseTrackRange(c, maxTrackReplayRange)
+	from, to, err := parseTrackRange(c, iot.MaxTrackReplayRange())
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -570,15 +435,15 @@ func (h *IoT) stream(c *gin.Context) {
 
 	var brokerCh <-chan iot.Ping
 	var brokerCancel func()
-	if h.Broker != nil {
-		brokerCh, brokerCancel = h.Broker.Subscribe(vehicleID)
+	if h.Hub != nil {
+		brokerCh, brokerCancel = h.Hub.Subscribe(vehicleID)
 		defer brokerCancel()
 	}
 
 	ticker := time.NewTicker(ssePollInterval)
 	defer ticker.Stop()
 
-	var lastSeenID int64
+	var lastSeenTS time.Time
 	ctx := c.Request.Context()
 
 	for {
@@ -590,8 +455,8 @@ func (h *IoT) stream(c *gin.Context) {
 				brokerCh = nil
 				continue
 			}
-			if p.ID > lastSeenID {
-				lastSeenID = p.ID
+			if p.TS.After(lastSeenTS) {
+				lastSeenTS = p.TS
 			}
 			emit(p)
 		case <-ticker.C:
@@ -599,8 +464,8 @@ func (h *IoT) stream(c *gin.Context) {
 			if err != nil || p == nil {
 				continue
 			}
-			if p.ID > lastSeenID {
-				lastSeenID = p.ID
+			if p.TS.After(lastSeenTS) {
+				lastSeenTS = p.TS
 				emit(*p)
 			}
 			// Comment frame keeps the connection warm against idle proxies.
@@ -703,18 +568,6 @@ func (h *IoT) fleetFuelAnomalies(c *gin.Context) {
 
 // ──────────────────────────────── helpers ─────────────────────────
 
-func bearerToken(c *gin.Context) string {
-	v := c.GetHeader("Authorization")
-	if v == "" {
-		return ""
-	}
-	const prefix = "Bearer "
-	if len(v) > len(prefix) && strings.EqualFold(v[:len(prefix)], prefix) {
-		return strings.TrimSpace(v[len(prefix):])
-	}
-	return ""
-}
-
 func parseTrackRange(c *gin.Context, maxSpan time.Duration) (from, to time.Time, err error) {
 	now := time.Now().UTC()
 	to = now
@@ -743,19 +596,6 @@ func parseTrackRange(c *gin.Context, maxSpan time.Duration) (from, to time.Time,
 		return time.Time{}, time.Time{}, fmt.Errorf("range capped at %d days for this endpoint; use multiple requests for longer windows", days)
 	}
 	return from, to, nil
-}
-
-func newestPing(pings []iot.Ping) *iot.Ping {
-	if len(pings) == 0 {
-		return nil
-	}
-	newest := &pings[0]
-	for i := 1; i < len(pings); i++ {
-		if pings[i].TS.After(newest.TS) {
-			newest = &pings[i]
-		}
-	}
-	return newest
 }
 
 func respondIotError(c *gin.Context, err error) {

@@ -399,12 +399,12 @@ Email links assume these frontend routes exist (build them in the Next.js app):
 
 ## IoT / GPS live tracking, history, fuel monitoring
 
-Two ingestion paths feed one storage shape (`telemetry_pings`):
+Ingest runs in **Fleet_IoT** (`edge/Fleet_IoT`); this service reads the same **`telemetry_timeseries`** Timescale hypertable via the shared `github.com/iag/fleet-iot/iot` module.
 
-1. **HTTP bulk ingest** — any device or relay can `POST /api/iot/pings` with an array of position records, authenticated via the device's API key (`Authorization: Bearer <key>`). Up to 1000 pings per request.
-2. **Native Codec 8/8E TCP** — `cmd/iot-gateway` accepts direct connections from Teltonika FMC650 / FMB920 / FMC130 units on `:5027` (configurable via `IOT_ADDR`). Devices identify by IMEI; if their serial is registered in `iot_devices` and `is_active=TRUE`, the gateway accepts the handshake, parses each AVL packet (CRC-checked), persists every record, and ACKs the device with the count it expects.
+1. **HTTP bulk ingest** — `POST /api/iot/pings` or `POST /v1/pings` on Fleet_IoT (`:4080`, or via gateway `/api/v1/fleet/api/iot/pings`). Device API key in `Authorization: Bearer <key>`. Up to 1000 pings per request.
+2. **Native Codec 8/8E TCP** — Fleet_IoT `cmd/gateway` on `:5027` (`IOT_ADDR`). Teltonika units identify by IMEI against `iot_devices.serial`.
 
-Both paths fall through to the same `iot.Store.InsertPings` (uses `pgx.CopyFrom` for batched COPY into `telemetry_pings`).
+Both paths call `iot.Store.InsertPings` (`pgx.CopyFrom` into `telemetry_timeseries`).
 
 ### Endpoints
 
@@ -416,7 +416,7 @@ Both paths fall through to the same `iot.Store.InsertPings` (uses `pgx.CopyFrom`
 | PATCH  | `/api/iot/devices/:id`                     | `manage_iot_device`      | `{ label?, vehicleId?, isActive? }`               |
 | DELETE | `/api/iot/devices/:id`                     | `manage_iot_device`      | remove device                                     |
 | POST   | `/api/iot/devices/:id/rotate-key`          | `manage_iot_device`      | issue a fresh API key (returns plaintext once)    |
-| POST   | `/api/iot/pings`                           | device `Authorization`   | bulk-ingest pings. Accepts a JSON array OR a single object. |
+| POST   | `/api/iot/pings` (Fleet_IoT, not fleet API) | device `Authorization`  | bulk-ingest pings. See `GET /api/iot/ingestion` on fleet for URLs. |
 | GET    | `/api/vehicles/:id/track?from=&to=&limit=` | `view_telemetry`         | playback over a time window (range capped at **14 days**, max 50,000 rows). RFC3339 timestamps. |
 | GET    | `/api/vehicles/:id/track/latest`           | `view_telemetry`         | most recent ping                                  |
 | GET    | `/api/vehicles/:id/track/stream`           | `view_telemetry`         | **SSE** live stream (`event: ping` frames). 2-second poll fallback for cross-process pings (gateway). |
@@ -425,14 +425,14 @@ Both paths fall through to the same `iot.Store.InsertPings` (uses `pgx.CopyFrom`
 ### Schema
 
 - `iot_devices(id, serial, label, vehicle_id, api_key_hash, is_active, last_seen, last_ip, created_at)` — physical units. `api_key_hash` is `sha256(plaintext)` — plaintext is shown once on creation/rotate.
-- `telemetry_pings(id, vehicle_id, device_id, ts, lat, lng, altitude, heading, speed_kmh, satellites, odo, fuel_level, ignition, event_id, raw)` — raw position fixes. `raw` is a JSONB blob of the device's full IO map (CAN frames, accelerometer, etc.) so future analytics can reach back for any field. Indexed by `(vehicle_id, ts DESC)` btree + BRIN on `ts`.
+- `telemetry_timeseries(...)` — raw position fixes (Timescale hypertable on `ts` when the extension is installed; see migration `0010_telemetry_timeseries.sql`). `raw` JSONB holds the full device IO map. Indexed by `(vehicle_id, ts DESC)` btree + BRIN on `ts`.
 - `telemetry_daily(vehicle_id, day, ping_count, distance_km, max_speed_kmh, avg_speed_kmh, fuel_used_litres, moving_minutes, idle_minutes, first_ping, last_ping)` — survives raw retention (populated by a future `cmd/telemetry-aggregate`).
 
 ### Volume + retention decisions
 
 Sized for **~50 vehicles × 1 ping/min ≈ 26M pings/year**. Defaults:
 
-- Plain Postgres (no Timescale extension required).
+- TimescaleDB recommended (`timescale/timescaledb` in Compose); falls back to a plain heap table without the extension.
 - 365-day raw retention; drop daily via `go run ./cmd/telemetry-purge --days 365`.
 - Daily aggregates kept indefinitely; populated nightly by `go run ./cmd/telemetry-aggregate` (defaults to "yesterday UTC, every vehicle that had pings").
 
@@ -451,11 +451,9 @@ Equivalent split (same effect as `--all`):
 
 The aggregator is idempotent (`ON CONFLICT DO UPDATE`), so re-running a day overwrites rather than duplicates.
 
-When fleet size or ping rate climbs ~10×, partition `telemetry_pings` by month or move to Timescale hypertables — same DB, no model changes.
-
 ### Fuel analytics
 
-`telemetry_pings.fuel_level` carries the continuous tank reading from the device (the gateway pulls Teltonika IO ID `89` by default, scaled `× 0.1` to a percentage; HTTP relays send whatever the device reports). The vehicle's hot-state `fuel` column is synced from the freshest ping in each batch.
+`telemetry_timeseries.fuel_level` carries the continuous tank reading from the device (the gateway pulls Teltonika IO ID `89` by default, scaled `× 0.1` to a percentage; HTTP relays send whatever the device reports). The vehicle's hot-state `fuel` column is synced from the freshest ping in each batch.
 
 Tank size lives on `vehicles.tank_capacity_litres` (seed data ships sensible defaults for the demo fleet). With both pieces, the nightly aggregator does the rest:
 

@@ -1,4 +1,4 @@
-// Command telemetry-purge drops telemetry_pings older than the configured
+// Command telemetry-purge drops telemetry_timeseries rows older than the configured
 // retention window. Intended for nightly cron:
 //
 //	DATABASE_URL=... go run ./cmd/telemetry-purge --days 365
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/iag/fleet-tool/backend/internal/db"
-	"github.com/iag/fleet-tool/backend/internal/iot"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/jobs"
 )
 

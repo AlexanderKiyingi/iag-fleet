@@ -45,6 +45,11 @@ var FuelStations = []string{
 // VehicleStatuses, JmpStatuses etc are exposed for clients that want a
 // canonical list (dropdowns, validation).
 var VehicleStatuses = []string{"moving", "idle", "maintenance", "offline"}
+
+var InspectionKinds = []string{"pre-trip", "post-trip", "periodic"}
+var InspectionStatuses = []string{"draft", "submitted", "passed", "failed"}
+var InspectionItemStatuses = []string{"pass", "fail", "na"}
+var PMServiceTypes = []string{"Service", "Inspection", "Tyres", "Brakes", "Engine", "Repair"}
 var JmpStatuses = []string{"draft", "pending-toolbox", "active", "completed", "cancelled"}
 var MileageStatuses = []string{"Pending", "Submitted", "Approved", "Rejected", "Disbursed"}
 var RequestStatuses = []string{"submitted", "reviewed", "approved", "assigned", "rejected", "completed"}

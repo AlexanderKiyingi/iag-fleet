@@ -53,13 +53,15 @@ TRUNCATE TABLE
     service_requests,
     task_items,
     deployment_days,
+    vehicle_inspections,
+    pm_schedules,
     -- Workspace constants (operator/role ticker row)
     operator_ticker,
     -- Activity log (seeded entries only — live entries restart from this point)
     audit_entries,
     -- IoT side
     iot_devices,
-    telemetry_pings,
+    telemetry_timeseries,
     telemetry_daily
 RESTART IDENTITY CASCADE;
 

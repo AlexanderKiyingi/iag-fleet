@@ -72,3 +72,8 @@ func (r *Redis) Delete(ctx context.Context, keys ...string) error {
 func (r *Redis) Close() error {
 	return r.c.Close()
 }
+
+// Client exposes the underlying Redis client for telemetry pub/sub.
+func (r *Redis) Client() *redis.Client {
+	return r.c
+}

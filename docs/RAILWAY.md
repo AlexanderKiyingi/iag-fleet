@@ -10,9 +10,13 @@ Use the **standalone** service repo (not the monorepo path alone):
 | Branch | `main` |
 | Root directory | `/` (repo root — `Dockerfile` is here) |
 
-If the service is wired to `IAG_multi_backend` instead, set **Root directory** to:
+If the service is wired to `IAG_multi_backend` instead, set **Root directory** to `services/operations/fleet`, **Dockerfile path** `Dockerfile`, and build target **`monorepo`** (Compose uses the same target). Prefer the standalone `iag-fleet` repo for simpler Railway builds.
 
-`services/operations/fleet`
+### `github.com/iag/fleet-iot` dependency
+
+The standalone Dockerfile **clones** [Fleet_IoT](https://github.com/AlexanderKiyingi/Fleet_IoT) at build time (`FLEET_IOT_REF`, default `main`). No monorepo `edge/` path is required on Railway.
+
+Optional build arg: `FLEET_IOT_REF` (git branch/tag) to pin the ingest module version.
 
 ## Postgres (fix “connection refused” on 127.0.0.1:5432)
 
@@ -38,8 +42,10 @@ Inside Railway there is no Postgres on `127.0.0.1` — you need the **Railway Po
    postgresql://svc_iag_fleet:PASSWORD@HOST:PORT/railway?sslmode=require
    ```
    Bootstrap once: `deploy/postgres/init/01-schemas.sql` + `02-service-roles.sh` (role owns `iag_fleet` schema).
-6. Leave `AUTO_MIGRATE=true` (default) so pending migrations apply on each deploy.
+6. Leave `AUTO_MIGRATE=true` (default) so pending migrations apply on each deploy (includes `telemetry_timeseries` + Timescale — see `deploy/postgres/TIMESCALE.md`).
 7. Redeploy the fleet service.
+
+For Postgres created before Timescale, run migration `0012_timescale_existing_volume` via `AUTO_MIGRATE` or follow `deploy/postgres/TIMESCALE.md`.
 
 The API also needs non-local URLs for auth/notifications when integrated; see `config/.env.production.example`.
 

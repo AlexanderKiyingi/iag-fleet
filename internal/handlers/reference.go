@@ -45,6 +45,10 @@ func (r *Reference) all(c *gin.Context) {
 		"deploymentMechStatuses": models.DeploymentMechStatuses,
 		"deploymentStatuses":     models.DeploymentStatuses,
 		"cargoStages":            models.CargoStages,
+		"inspectionKinds":        models.InspectionKinds,
+		"inspectionStatuses":     models.InspectionStatuses,
+		"inspectionItemStatuses": models.InspectionItemStatuses,
+		"pmServiceTypes":         models.PMServiceTypes,
 	}
 	blob, err := json.Marshal(payload)
 	if err != nil {

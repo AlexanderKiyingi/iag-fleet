@@ -21,7 +21,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/config"
 	pgdb "github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-tool/backend/internal/iot"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/migrate"
 	fleetmw "github.com/iag/fleet-tool/backend/internal/middleware"
 	"github.com/iag/fleet-tool/backend/internal/notifications"
@@ -64,8 +64,6 @@ func main() {
 
 	repo := store.NewRepository(pool)
 	iotStore := iot.NewStore(pool)
-	iotBroker := iot.NewBroker()
-
 	var verifier *authclient.Verifier
 	if cfg.AuthMode == "jwt" {
 		verifier = authclient.NewVerifier(cfg.JWKSURL, cfg.JWTIssuer)
@@ -94,6 +92,10 @@ func main() {
 			defer func() { _ = rdb.Close() }()
 		}
 	}
+	iotHub := iot.NewHubFromEnv()
+	if strings.TrimSpace(os.Getenv("REDIS_URL")) != "" {
+		slog.Info("telemetry hub ready (Redis pub/sub when connected)")
+	}
 
 	notifBroker := notifications.NewBroker()
 
@@ -117,7 +119,7 @@ func main() {
 		PlatformAuth:        platformAuth,
 		Platform:            platformSvc,
 		IoTStore:            iotStore,
-		IoTBroker:           iotBroker,
+		IoTHub:              iotHub,
 		RoutingOSRMURL:      strings.TrimSpace(os.Getenv("ROUTING_OSRM_URL")),
 		Cache:               appCache,
 		TTLDashboard:        durationFromEnvSec("CACHE_TTL_DASHBOARD_SEC", 30),

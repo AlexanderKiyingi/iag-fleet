@@ -8,8 +8,10 @@ import (
 	"log"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-tool/backend/internal/iot"
+	"github.com/iag/fleet-iot/iot"
 )
 
 const DayLayout = "2006-01-02"
@@ -22,7 +24,7 @@ type VehicleDayPair struct {
 
 // AggregateTelemetry rolls raw pings into telemetry_daily and fuel_events
 // for every (vehicle, day) in range. to is exclusive (half-open [from, to)).
-func AggregateTelemetry(ctx context.Context, store *iot.Store, bus *events.Bus, from, to time.Time, vehicle string) (written, eventsWritten, failed int, err error) {
+func AggregateTelemetry(ctx context.Context, store *iot.Store, bus *events.Bus, pool *pgxpool.Pool, from, to time.Time, vehicle string) (written, eventsWritten, failed int, err error) {
 	pairs, err := loadPairs(ctx, store, vehicle, from, to)
 	if err != nil {
 		return 0, 0, 0, err
@@ -78,6 +80,13 @@ func AggregateTelemetry(ctx context.Context, store *iot.Store, bus *events.Bus, 
 			p.VehicleID, p.Day.Format(DayLayout),
 			res.Summary.PingCount, res.Summary.DistanceKm, res.Summary.MovingMinutes, res.Summary.IdleMinutes,
 			fuelLine, evLine)
+	}
+	if pool != nil {
+		if linked, linkErr := LinkFuelEvents(ctx, pool, 90); linkErr != nil {
+			log.Printf("fuel link after aggregate: %v", linkErr)
+		} else if linked > 0 {
+			log.Printf("fuel link after aggregate: %d matched", linked)
+		}
 	}
 	return written, eventsWritten, failed, nil
 }

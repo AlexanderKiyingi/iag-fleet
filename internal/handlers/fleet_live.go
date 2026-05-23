@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -17,6 +18,7 @@ import (
 // Next.js map shell so fleet markers move without polling /api/vehicles.
 type FleetLive struct {
 	Repo *store.Repository
+	Hub  *iot.Hub
 }
 
 func (h *FleetLive) Register(rg *gin.RouterGroup) {
@@ -49,17 +51,13 @@ func (h *FleetLive) stream(c *gin.Context) {
 		return
 	}
 
-	tick := time.NewTicker(3 * time.Second)
-	defer tick.Stop()
-
 	ctx := c.Request.Context()
-	emit := func(vs []models.Vehicle) {
-		snaps := make([]fleetVehicleSnap, 0, len(vs))
-		for _, v := range vs {
-			snaps = append(snaps, fleetVehicleSnap{
-				ID: v.ID, Plate: v.Plate, Lat: v.Lat, Lng: v.Lng,
-				Status: v.Status, Heading: v.Heading, Location: v.Location,
-			})
+	snapsByID := make(map[string]fleetVehicleSnap)
+
+	emitAll := func() {
+		snaps := make([]fleetVehicleSnap, 0, len(snapsByID))
+		for _, s := range snapsByID {
+			snaps = append(snaps, s)
 		}
 		b, err := json.Marshal(fleetPayload{
 			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
@@ -72,22 +70,57 @@ func (h *FleetLive) stream(c *gin.Context) {
 		flusher.Flush()
 	}
 
-	if vs, err := h.Repo.Vehicles.List(ctx); err == nil {
-		emit(vs)
+	loadAll := func() {
+		vs, err := h.Repo.Vehicles.List(ctx)
+		if err != nil {
+			return
+		}
+		for _, v := range vs {
+			snapsByID[v.ID] = vehicleSnap(v)
+		}
+		emitAll()
 	}
+
+	loadAll()
+
+	var liveCh <-chan iot.Ping
+	var liveCancel func()
+	if h.Hub != nil {
+		liveCh, liveCancel = h.Hub.SubscribeLive()
+		defer liveCancel()
+	}
+
+	// Fallback poll when Redis is not configured or between sparse events.
+	tick := time.NewTicker(15 * time.Second)
+	defer tick.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
-			vs, err := h.Repo.Vehicles.List(ctx)
-			if err != nil {
+		case p, ok := <-liveCh:
+			if !ok {
+				liveCh = nil
 				continue
 			}
-			emit(vs)
+			if p.VehicleID == "" {
+				continue
+			}
+			if v, err := h.Repo.Vehicles.Get(ctx, p.VehicleID); err == nil {
+				snapsByID[v.ID] = vehicleSnap(v)
+				emitAll()
+			}
+		case <-tick.C:
+			loadAll()
 			fmt.Fprintf(c.Writer, ": keep-alive\n\n")
 			flusher.Flush()
 		}
+	}
+}
+
+func vehicleSnap(v models.Vehicle) fleetVehicleSnap {
+	return fleetVehicleSnap{
+		ID: v.ID, Plate: v.Plate, Lat: v.Lat, Lng: v.Lng,
+		Status: v.Status, Heading: v.Heading, Location: v.Location,
 	}
 }

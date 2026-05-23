@@ -17,7 +17,7 @@ import (
 
 	"github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-tool/backend/internal/iot"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/jobs"
 )
 
@@ -25,6 +25,8 @@ func main() {
 	doAll := flag.Bool("all", false, "run telemetry aggregate (default range) then purge")
 	doAgg := flag.Bool("aggregate", false, "roll raw pings into telemetry_daily / fuel_events")
 	doPurge := flag.Bool("purge", false, "delete raw pings older than retention")
+	doLink := flag.Bool("link-fuel", false, "match telemetry refuel events to fuel_records")
+	linkDays := flag.Int("link-days", 90, "lookback days for --link-fuel")
 	purgeDays := flag.Int("purge-days", 365, "retention window for --purge / --all (days)")
 	fromFlag := flag.String("from", "", "aggregate: first day YYYY-MM-DD UTC (default yesterday)")
 	toFlag := flag.String("to", "", "aggregate: last day inclusive YYYY-MM-DD UTC")
@@ -37,8 +39,9 @@ func main() {
 
 	runAgg := *doAll || *doAgg
 	runPurge := *doAll || *doPurge
-	if !runAgg && !runPurge {
-		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, and/or --purge")
+	runLink := *doLink
+	if !runAgg && !runPurge && !runLink {
+		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, --purge, and/or --link-fuel")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -65,7 +68,7 @@ func main() {
 			log.Fatalf("aggregate range: %v", err)
 		}
 		log.Printf("fleet-jobs: aggregating %s .. %s", from.Format(jobs.DayLayout), to.Add(-time.Nanosecond).Format(jobs.DayLayout))
-		written, ev, failed, err := jobs.AggregateTelemetry(ctxAgg, store, eventBus, from, to, *vehicleFlag)
+		written, ev, failed, err := jobs.AggregateTelemetry(ctxAgg, store, eventBus, pool, from, to, *vehicleFlag)
 		if err != nil {
 			log.Fatalf("aggregate: %v", err)
 		}
@@ -77,6 +80,22 @@ func main() {
 				os.Exit(1)
 			}
 		}
+		if *doAll {
+			linked, err := jobs.LinkFuelEvents(ctxAgg, pool, *linkDays)
+			if err != nil {
+				log.Printf("fleet-jobs link-fuel: %v", err)
+			} else {
+				log.Print(jobs.LinkFuelEventsSummary(linked, nil))
+			}
+		}
+	}
+
+	if runLink {
+		linked, err := jobs.LinkFuelEvents(ctxAgg, pool, *linkDays)
+		if err != nil {
+			log.Fatalf("link-fuel: %v", err)
+		}
+		log.Print(jobs.LinkFuelEventsSummary(linked, nil))
 	}
 
 	if runPurge {

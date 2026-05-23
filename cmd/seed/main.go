@@ -148,7 +148,7 @@ func summarize(ctx context.Context, pool *pgxpool.Pool) error {
 		"maintenance_items", "parts", "tyres", "trips", "safety_events",
 		"compliance_items", "service_requests", "task_items",
 		"deployment_days", "operator_ticker", "audit_entries",
-		"iot_devices", "telemetry_pings", "telemetry_daily", "fuel_events",
+		"iot_devices", "telemetry_timeseries", "telemetry_daily", "fuel_events",
 	}
 	for _, t := range tables {
 		var n int
