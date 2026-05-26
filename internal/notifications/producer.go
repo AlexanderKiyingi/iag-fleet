@@ -355,7 +355,7 @@ func (p *Producer) maybePublishSignal(ctx context.Context, userID string, sig si
 	if err != nil || email == "" {
 		return
 	}
-	p.Events.PublishNotificationRequested(ctx, "email", email, "fleet.alert", map[string]string{
+	p.Events.PublishFleetAlert(ctx, "email", email, "fleet.alert", map[string]string{
 		"title": sig.Title,
 		"body":  sig.Body,
 		"href":  sig.Href,
