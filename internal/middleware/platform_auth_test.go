@@ -8,12 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestAttachPrincipal_skipsGatewaySecretOnReady(t *testing.T) {
+func TestAttachPrincipal_passesProbePathsWithoutToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mw := NewPlatformAuth(PlatformAuthOptions{
-		Mode:          "gateway",
-		GatewaySecret: "test-secret-min-16-chars",
-	})
+	mw := NewPlatformAuth(PlatformAuthOptions{})
 
 	r := gin.New()
 	r.Use(mw.AttachPrincipal())
@@ -24,16 +21,14 @@ func TestAttachPrincipal_skipsGatewaySecretOnReady(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("GET /ready = %d, want 200 (no gateway headers)", w.Code)
+		t.Fatalf("GET /ready = %d, want 200 (no token)", w.Code)
 	}
 }
 
-func TestAttachPrincipal_requiresGatewaySecretOnAPI(t *testing.T) {
+func TestAttachPrincipal_503WhenVerifierMissingOnAPI(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mw := NewPlatformAuth(PlatformAuthOptions{
-		Mode:          "gateway",
-		GatewaySecret: "test-secret-min-16-chars",
-	})
+	// No verifier configured — protected routes should fail closed.
+	mw := NewPlatformAuth(PlatformAuthOptions{})
 
 	r := gin.New()
 	r.Use(mw.AttachPrincipal())
@@ -43,7 +38,7 @@ func TestAttachPrincipal_requiresGatewaySecretOnAPI(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("GET /api/ping without secret = %d, want 401", w.Code)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /api/ping without verifier = %d, want 503", w.Code)
 	}
 }

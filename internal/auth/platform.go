@@ -11,12 +11,6 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/ctxkeys"
 )
 
-const ctxAuthModeKey = "auth.mode"
-
-func SetMode(c *gin.Context, mode string) {
-	c.Set(ctxAuthModeKey, mode)
-}
-
 // HasPerm checks platform JWT permissions (fleet.* and legacy unprefixed aliases).
 func HasPerm(c *gin.Context, codename string) bool {
 	claims, ok := platformClaims(c)

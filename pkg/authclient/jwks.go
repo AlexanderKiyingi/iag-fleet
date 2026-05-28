@@ -26,19 +26,23 @@ type Claims struct {
 }
 
 type Verifier struct {
-	mu      sync.RWMutex
-	keys    map[string]*rsa.PublicKey
-	jwksURL string
-	issuer  string
-	client  *http.Client
+	mu       sync.RWMutex
+	keys     map[string]*rsa.PublicKey
+	jwksURL  string
+	issuer   string
+	audience string
+	client   *http.Client
 }
 
-func NewVerifier(jwksURL, issuer string) *Verifier {
+// NewVerifier constructs a JWKS verifier that enforces issuer and audience.
+// audience must match the service's expected aud claim (e.g. "iag.fleet").
+func NewVerifier(jwksURL, issuer, audience string) *Verifier {
 	return &Verifier{
-		keys:    make(map[string]*rsa.PublicKey),
-		jwksURL: jwksURL,
-		issuer:  issuer,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		keys:     make(map[string]*rsa.PublicKey),
+		jwksURL:  jwksURL,
+		issuer:   issuer,
+		audience: audience,
+		client:   &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -108,6 +112,10 @@ func parseRSAPublicKey(nB64, eB64 string) (*rsa.PublicKey, error) {
 
 func (v *Verifier) Verify(tokenString string) (*Claims, uuid.UUID, error) {
 	claims := &Claims{}
+	parseOpts := []jwt.ParserOption{jwt.WithIssuer(v.issuer)}
+	if v.audience != "" {
+		parseOpts = append(parseOpts, jwt.WithAudience(v.audience))
+	}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (any, error) {
 		if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
 			return nil, fmt.Errorf("unexpected signing method")
@@ -124,7 +132,7 @@ func (v *Verifier) Verify(tokenString string) (*Claims, uuid.UUID, error) {
 			return key, nil
 		}
 		return nil, fmt.Errorf("no verification key")
-	}, jwt.WithIssuer(v.issuer))
+	}, parseOpts...)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}

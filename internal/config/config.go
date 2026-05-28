@@ -9,10 +9,9 @@ import (
 // Config holds runtime settings for the fleet API.
 type Config struct {
 	Addr             string
-	AuthMode         string
-	GatewaySecret    string
 	JWTIssuer        string
 	JWKSURL          string
+	Audience         string // aud claim the service requires on inbound tokens
 	GatewayAPIPrefix string
 	CORSOrigin       string
 	AppName          string
@@ -23,21 +22,16 @@ type Config struct {
 	EventBusEnabled  bool
 }
 
-// Load reads configuration from the environment.
+// Load reads configuration from env. Hard cutover: no AUTH_MODE, no
+// GATEWAY_INTERNAL_SECRET — every inbound request must carry a verifiable
+// Bearer token with aud=iag.fleet.
 func Load() (Config, error) {
-	authMode := strings.ToLower(strings.TrimSpace(envOr("AUTH_MODE", "gateway")))
-	switch authMode {
-	case "gateway", "jwt":
-	default:
-		return Config{}, fmt.Errorf("AUTH_MODE must be gateway or jwt (got %q)", authMode)
-	}
-
+	issuer := envOr("JWT_ISSUER", "http://localhost:3001")
 	cfg := Config{
 		Addr:             ListenAddr(),
-		AuthMode:         authMode,
-		GatewaySecret:    strings.TrimSpace(os.Getenv("GATEWAY_INTERNAL_SECRET")),
-		JWTIssuer:        envOr("JWT_ISSUER", "http://localhost:3001"),
-		JWKSURL:          envOr("JWKS_URL", "http://127.0.0.1:3001/.well-known/jwks.json"),
+		JWTIssuer:        issuer,
+		JWKSURL:          envOr("JWKS_URL", strings.TrimRight(issuer, "/")+"/.well-known/jwks.json"),
+		Audience:         envOr("AUDIENCE", "iag.fleet"),
 		GatewayAPIPrefix: strings.TrimSpace(envOr("GATEWAY_API_PREFIX", "/api/v1/fleet")),
 		CORSOrigin:       envOr("CORS_ORIGIN", "http://localhost:3000"),
 		AppName:          envOr("APP_NAME", "IAG Fleet"),
@@ -57,14 +51,11 @@ func Load() (Config, error) {
 		cfg.KafkaBrokers = []string{"127.0.0.1:19092"}
 	}
 
-	if cfg.AuthMode == "gateway" && cfg.GatewaySecret == "" {
-		return Config{}, fmt.Errorf("AUTH_MODE=gateway requires GATEWAY_INTERNAL_SECRET")
+	if cfg.Audience == "" {
+		return Config{}, fmt.Errorf("AUDIENCE is required (e.g. iag.fleet)")
 	}
-	if cfg.AuthMode == "gateway" && len(cfg.GatewaySecret) < 16 {
-		return Config{}, fmt.Errorf("GATEWAY_INTERNAL_SECRET must be at least 16 characters")
-	}
-	if cfg.AuthMode == "jwt" && cfg.JWKSURL == "" {
-		return Config{}, fmt.Errorf("AUTH_MODE=jwt requires JWKS_URL")
+	if cfg.JWKSURL == "" {
+		return Config{}, fmt.Errorf("JWKS_URL is required")
 	}
 
 	return cfg, nil

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/handlers"
@@ -25,7 +24,6 @@ import (
 // Options configures the router.
 type Options struct {
 	AllowedOrigin string
-	AuthMode      string
 	PlatformAuth  *fleetmw.PlatformAuth
 	IoTStore      *iot.Store
 	IoTHub        *iot.Hub
@@ -66,10 +64,6 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	r.Use(corsMiddleware(opts.AllowedOrigin))
 	r.Use(securityHeaders())
 	r.Use(requestTimeout(getRequestTimeout()))
-	r.Use(func(c *gin.Context) {
-		auth.SetMode(c, opts.AuthMode)
-		c.Next()
-	})
 
 	health := func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -94,7 +88,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	r.Use(perRouteRateLimits(map[string]gin.HandlerFunc{}, security.RateLimit(300, 60, security.ByIP)))
 
 	(&handlers.Platform{Repo: repo}).Register(api)
-	(&handlers.PlatformStatus{Services: opts.Platform, AuthMode: opts.AuthMode}).Register(api)
+	(&handlers.PlatformStatus{Services: opts.Platform}).Register(api)
 
 	// Resource Entity values match the codenames seeded in db/seed.sql so
 	// "view_<entity>", "add_<entity>", "change_<entity>", "delete_<entity>"

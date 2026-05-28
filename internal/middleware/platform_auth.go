@@ -1,3 +1,7 @@
+// Package middleware implements Bearer+aud authentication for inbound fleet
+// requests. The gateway-header trust path (X-IAG-* + GATEWAY_INTERNAL_SECRET)
+// has been removed — every request must carry a verifiable JWT with
+// aud=iag.fleet.
 package middleware
 
 import (
@@ -11,37 +15,16 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/ctxkeys"
 )
 
-// Platform headers set by the API gateway after JWT verification.
-const (
-	HeaderUserID        = "X-IAG-User-Id"
-	HeaderEmail         = "X-IAG-Email"
-	HeaderGroups        = "X-IAG-Groups"
-	HeaderRoles         = "X-IAG-Roles"
-	HeaderPermissions   = "X-IAG-Permissions"
-	HeaderIsSuperuser   = "X-IAG-Is-Superuser"
-	HeaderIsStaff       = "X-IAG-Is-Staff"
-	HeaderGatewaySecret = "X-IAG-Gateway-Secret"
-)
-
-// PlatformAuth wires gateway-trust or JWT verification for platform modes.
 type PlatformAuth struct {
-	authMode      string
-	gatewaySecret string
-	verifier      *authclient.Verifier
+	verifier *authclient.Verifier
 }
 
 type PlatformAuthOptions struct {
-	Mode          string
-	GatewaySecret string
-	Verifier      *authclient.Verifier
+	Verifier *authclient.Verifier
 }
 
 func NewPlatformAuth(opts PlatformAuthOptions) *PlatformAuth {
-	return &PlatformAuth{
-		authMode:      opts.Mode,
-		gatewaySecret: opts.GatewaySecret,
-		verifier:      opts.Verifier,
-	}
+	return &PlatformAuth{verifier: opts.Verifier}
 }
 
 func isPublicProbePath(path string) bool {
@@ -53,27 +36,35 @@ func isPublicProbePath(path string) bool {
 	}
 }
 
-// AttachPrincipal resolves the caller on protected routes. Anonymous requests
-// still pass through; handlers use auth.RequireUser / RequirePerm.
-// Probe paths (/ready, /health) skip gateway secret checks for load balancers.
+// AttachPrincipal validates a Bearer token (if present) and pins the claims +
+// user UUID onto the Gin context. Anonymous requests pass through; handlers
+// use auth.RequireUser / RequirePerm to reject them.
 func (m *PlatformAuth) AttachPrincipal() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if isPublicProbePath(c.Request.URL.Path) {
 			c.Next()
 			return
 		}
-		switch m.authMode {
-		case "gateway":
-			m.fromGateway(c)
-		case "jwt":
-			m.fromJWT(c)
-		default:
-			c.Next()
+		if m.verifier == nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "jwt verifier not configured"})
+			return
 		}
+		header := c.GetHeader("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			c.Next()
+			return
+		}
+		tokenStr := strings.TrimPrefix(header, "Bearer ")
+		claims, userID, err := m.verifier.Verify(tokenStr)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			return
+		}
+		setPrincipal(c, userID, claims, claims.Permissions)
+		c.Next()
 	}
 }
 
-// RequireAuth blocks unauthenticated platform requests.
 func (m *PlatformAuth) RequireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if _, ok := UserID(c); !ok {
@@ -82,60 +73,6 @@ func (m *PlatformAuth) RequireAuth() gin.HandlerFunc {
 		}
 		c.Next()
 	}
-}
-
-func (m *PlatformAuth) fromGateway(c *gin.Context) {
-	if m.gatewaySecret != "" && c.GetHeader(HeaderGatewaySecret) != m.gatewaySecret {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return
-	}
-	sub := c.GetHeader(HeaderUserID)
-	if sub == "" {
-		c.Next()
-		return
-	}
-	userID, err := uuid.Parse(sub)
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
-		return
-	}
-	groups := splitHeaderList(c.GetHeader(HeaderGroups))
-	if len(groups) == 0 {
-		groups = splitHeaderList(c.GetHeader(HeaderRoles))
-	}
-	perms := splitHeaderList(c.GetHeader(HeaderPermissions))
-	claims := &authclient.Claims{
-		Email:       c.GetHeader(HeaderEmail),
-		IsSuperuser: strings.EqualFold(c.GetHeader(HeaderIsSuperuser), "true"),
-		IsStaff:     strings.EqualFold(c.GetHeader(HeaderIsStaff), "true"),
-		Groups:      groups,
-		Roles:       groups,
-		Permissions: perms,
-	}
-	claims.Subject = sub
-	setPrincipal(c, userID, claims, perms)
-	c.Next()
-}
-
-func (m *PlatformAuth) fromJWT(c *gin.Context) {
-	if m.verifier == nil {
-		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "jwt verifier not configured"})
-		return
-	}
-	header := c.GetHeader("Authorization")
-	if !strings.HasPrefix(header, "Bearer ") {
-		c.Next()
-		return
-	}
-	tokenStr := strings.TrimPrefix(header, "Bearer ")
-	claims, userID, err := m.verifier.Verify(tokenStr)
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-		return
-	}
-	perms := claims.Permissions
-	setPrincipal(c, userID, claims, perms)
-	c.Next()
 }
 
 func setPrincipal(c *gin.Context, userID uuid.UUID, claims *authclient.Claims, perms []string) {
@@ -169,18 +106,4 @@ func Permissions(c *gin.Context) []string {
 	}
 	list, _ := v.([]string)
 	return list
-}
-
-func splitHeaderList(value string) []string {
-	if value == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if trimmed := strings.TrimSpace(p); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
 }

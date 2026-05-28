@@ -64,22 +64,17 @@ func main() {
 
 	repo := store.NewRepository(pool)
 	iotStore := iot.NewStore(pool)
-	var verifier *authclient.Verifier
-	if cfg.AuthMode == "jwt" {
-		verifier = authclient.NewVerifier(cfg.JWKSURL, cfg.JWTIssuer)
-		initCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := verifier.Refresh(initCtx); err != nil {
-			cancel()
-			slog.Error("jwks refresh", "err", err)
-			os.Exit(1)
-		}
-		cancel()
-		go jwksRefreshLoop(verifier)
+	verifier := authclient.NewVerifier(cfg.JWKSURL, cfg.JWTIssuer, cfg.Audience)
+	initCtx, refreshCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := verifier.Refresh(initCtx); err != nil {
+		refreshCancel()
+		slog.Error("jwks refresh", "err", err)
+		os.Exit(1)
 	}
+	refreshCancel()
+	go jwksRefreshLoop(verifier)
 	platformAuth := fleetmw.NewPlatformAuth(fleetmw.PlatformAuthOptions{
-		Mode:          cfg.AuthMode,
-		GatewaySecret: cfg.GatewaySecret,
-		Verifier:      verifier,
+		Verifier: verifier,
 	})
 
 	appCache := cache.Cache(cache.NoOp{})
@@ -115,7 +110,6 @@ func main() {
 
 	r := router.New(repo, router.Options{
 		AllowedOrigin:       cfg.CORSOrigin,
-		AuthMode:            cfg.AuthMode,
 		PlatformAuth:        platformAuth,
 		Platform:            platformSvc,
 		IoTStore:            iotStore,
@@ -152,7 +146,7 @@ func main() {
 		_, redisCache := appCache.(*cache.Redis)
 		slog.Info("API listening",
 			"addr", cfg.Addr,
-			"authMode", cfg.AuthMode,
+			"audience", cfg.Audience,
 			"corsOrigin", cfg.CORSOrigin,
 			"cache", map[bool]string{true: "redis", false: "disabled"}[redisCache],
 		)

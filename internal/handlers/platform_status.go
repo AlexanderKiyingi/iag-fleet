@@ -13,7 +13,6 @@ import (
 // PlatformStatus exposes shared-service integration health for operators.
 type PlatformStatus struct {
 	Services platform.Services
-	AuthMode string
 }
 
 func (p *PlatformStatus) Register(rg *gin.RouterGroup) {
@@ -34,7 +33,6 @@ func (p *PlatformStatus) status(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"authMode":          p.AuthMode,
 		"publicApiUrl":      p.Services.PublicAPIURL,
 		"gatewayApiPrefix":  p.Services.GatewayAPIPrefix,
 		"authenticationUrl": p.Services.AuthenticationURL,
