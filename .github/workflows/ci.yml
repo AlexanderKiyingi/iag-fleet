@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: iag
+          POSTGRES_PASSWORD: iag_dev
+          POSTGRES_DB: iag_platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U iag -d iag_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create service schema
+        env:
+          PGPASSWORD: iag_dev
+        run: psql -h localhost -U iag -d iag_platform -c 'CREATE SCHEMA IF NOT EXISTS iag_fleet;'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Fetch Fleet_IoT (iag-telemetry-gateway) for the go.mod replace
+        run: |
+          git clone --depth 1 --branch main https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git /tmp/deps/Fleet_IoT
+          go mod edit -replace=github.com/iag/fleet-iot=/tmp/deps/Fleet_IoT
+
+      - name: go mod tidy
+        run: go mod tidy
+
+      - name: Build
+        run: go build -v ./...
+        env:
+          DATABASE_URL: postgres://iag:iag_dev@localhost:5432/iag_platform?sslmode=disable&search_path=iag_fleet
+
+      - name: Test
+        run: go test ./...
+        env:
+          DATABASE_URL: postgres://iag:iag_dev@localhost:5432/iag_platform?sslmode=disable&search_path=iag_fleet
