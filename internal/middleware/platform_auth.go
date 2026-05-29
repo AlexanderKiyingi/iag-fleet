@@ -60,13 +60,19 @@ func (m *PlatformAuth) AttachPrincipal() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
-		// claims.Subject is a UUID for user principals and the client_id for
-		// service principals. UserID is left zero when it isn't a UUID.
+		// User principals must carry a UUID subject — reject malformed ones
+		// (mirrors pre-migration behavior). Service principals (client_id
+		// subject) are accepted but get no UserID set, so auth.IsAuthenticated
+		// and the RequireUser/RequirePerm gates correctly treat them as
+		// non-user callers and 401.
 		var userID uuid.UUID
 		if claims.IsUser() {
-			if id, err := uuid.Parse(claims.Subject); err == nil {
-				userID = id
+			id, err := uuid.Parse(claims.Subject)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+				return
 			}
+			userID = id
 		}
 		setPrincipal(c, userID, claims, claims.Permissions)
 		c.Next()
@@ -84,7 +90,12 @@ func (m *PlatformAuth) RequireAuth() gin.HandlerFunc {
 }
 
 func setPrincipal(c *gin.Context, userID uuid.UUID, claims *authclient.Claims, perms []string) {
-	c.Set(ctxkeys.UserID, userID)
+	// Only set UserID for user principals — auth.IsAuthenticated and the
+	// RequireUser gates key off the presence of this entry to distinguish
+	// human users from service-principal callers.
+	if userID != uuid.Nil {
+		c.Set(ctxkeys.UserID, userID)
+	}
 	c.Set(ctxkeys.Claims, claims)
 	c.Set(ctxkeys.Permissions, perms)
 }
