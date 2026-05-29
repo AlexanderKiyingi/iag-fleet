@@ -9,7 +9,8 @@
 
 FROM golang:1.25-alpine AS base
 RUN apk add --no-cache git
-ENV FLEET_IOT_DEP=/deps/fleet-iot
+ENV FLEET_IOT_DEP=/deps/fleet-iot \
+    PLATFORM_GO_DEP=/deps/platform-go
 
 FROM base AS fleet-iot-clone
 ARG FLEET_IOT_REF=main
@@ -19,21 +20,34 @@ RUN git clone --depth 1 --branch "${FLEET_IOT_REF}" "${FLEET_IOT_REPO}" "${FLEET
 FROM base AS fleet-iot-copy
 COPY edge/Fleet_IoT ${FLEET_IOT_DEP}
 
+FROM base AS platform-go-copy
+COPY shared/platform-go ${PLATFORM_GO_DEP}
+
 # ─── Standalone iag-fleet (repo root = service root) ───────────────────────
 FROM base AS build-standalone
+# Standalone (iag-fleet repo root): the meta-repo is private, so Railway
+# can't clone it at build time. The standalone repo carries a committed
+# snapshot at third_party/platform-go (refreshed via
+# scripts/sync-platform-go.sh). fleet-iot is still cloned from the
+# (public) iag-telemetry-gateway repo above.
 COPY --from=fleet-iot-clone ${FLEET_IOT_DEP} ${FLEET_IOT_DEP}
 WORKDIR /src
+COPY third_party/platform-go ${PLATFORM_GO_DEP}
 COPY go.mod go.sum ./
-COPY pkg/authclient ./pkg/authclient
-RUN go mod edit -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} && go mod download
+RUN go mod edit \
+        -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} \
+        -replace=github.com/alvor-technologies/iag-platform-go=${PLATFORM_GO_DEP} \
+    && go mod download
 COPY . .
 ARG VERSION=dev
 # `COPY . .` restored go.mod from the build context, which still carries the
-# meta-repo-only `replace github.com/iag/fleet-iot => ../../../edge/Fleet_IoT`.
-# That path does not exist inside the build container, so re-apply the
-# vendored replace before invoking `go build`.
+# meta-repo-only replaces (`../../../edge/Fleet_IoT` and
+# `../../../shared/platform-go`). Neither path exists inside the build
+# container, so re-apply the vendored replaces before invoking `go build`.
 RUN set -eu; \
-    go mod edit -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP}; \
+    go mod edit \
+        -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} \
+        -replace=github.com/alvor-technologies/iag-platform-go=${PLATFORM_GO_DEP}; \
     mkdir -p /out; \
     for cmd in . ./cmd/seed ./cmd/fleet-jobs ./cmd/telemetry-aggregate ./cmd/telemetry-purge ./cmd/healthcheck; do \
         name=$(basename $cmd); [ "$name" = "." ] && name=api; \
@@ -45,13 +59,19 @@ RUN set -eu; \
 # ─── Monorepo (context = repo root) ────────────────────────────────────────
 FROM base AS build-monorepo
 COPY --from=fleet-iot-copy ${FLEET_IOT_DEP} ${FLEET_IOT_DEP}
+COPY --from=platform-go-copy ${PLATFORM_GO_DEP} ${PLATFORM_GO_DEP}
 WORKDIR /src/services/operations/fleet
 COPY services/operations/fleet/go.mod services/operations/fleet/go.sum ./
-COPY services/operations/fleet/pkg/authclient ./pkg/authclient
-RUN go mod edit -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} && go mod download
+RUN go mod edit \
+        -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} \
+        -replace=github.com/alvor-technologies/iag-platform-go=${PLATFORM_GO_DEP} \
+    && go mod download
 COPY services/operations/fleet/ .
 ARG VERSION=dev
 RUN set -eu; \
+    go mod edit \
+        -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} \
+        -replace=github.com/alvor-technologies/iag-platform-go=${PLATFORM_GO_DEP}; \
     mkdir -p /out; \
     for cmd in . ./cmd/seed ./cmd/fleet-jobs ./cmd/telemetry-aggregate ./cmd/telemetry-purge ./cmd/healthcheck; do \
         name=$(basename $cmd); [ "$name" = "." ] && name=api; \

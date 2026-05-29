@@ -15,7 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/alvor-technologies/iag-authclient"
+	"github.com/alvor-technologies/iag-platform-go/authclient"
 	"github.com/iag/fleet-tool/backend/db"
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/config"
@@ -64,7 +64,11 @@ func main() {
 
 	repo := store.NewRepository(pool)
 	iotStore := iot.NewStore(pool)
-	verifier := authclient.NewVerifier(cfg.JWKSURL, cfg.JWTIssuer, cfg.Audience)
+	verifier := authclient.NewVerifier(authclient.Options{
+		JWKSURL:  cfg.JWKSURL,
+		Issuer:   cfg.JWTIssuer,
+		Audience: cfg.Audience,
+	})
 	initCtx, refreshCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := verifier.Refresh(initCtx); err != nil {
 		refreshCancel()

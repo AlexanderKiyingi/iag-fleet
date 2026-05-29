@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/alvor-technologies/iag-authclient"
+	"github.com/alvor-technologies/iag-platform-go/authclient"
 	"github.com/iag/fleet-tool/backend/internal/ctxkeys"
 )
 
@@ -21,7 +21,7 @@ func HasPerm(c *gin.Context, codename string) bool {
 		return true
 	}
 	for _, want := range []string{codename, fleetAlias(codename), legacyAlias(codename)} {
-		if authclient.HasPermission(claims, want) {
+		if claims.HasPermission(want) {
 			return true
 		}
 	}

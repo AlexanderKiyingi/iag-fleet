@@ -41,6 +41,9 @@ jobs:
           git clone --depth 1 --branch main https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git /tmp/deps/Fleet_IoT
           go mod edit -replace=github.com/iag/fleet-iot=/tmp/deps/Fleet_IoT
 
+      - name: Point platform-go replace at vendored third_party copy
+        run: go mod edit -replace=github.com/alvor-technologies/iag-platform-go=$(pwd)/third_party/platform-go
+
       - name: go mod tidy
         run: go mod tidy
 

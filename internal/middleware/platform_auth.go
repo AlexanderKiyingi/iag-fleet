@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/alvor-technologies/iag-authclient"
+	"github.com/alvor-technologies/iag-platform-go/authclient"
 	"github.com/iag/fleet-tool/backend/internal/ctxkeys"
 )
 
@@ -55,10 +55,18 @@ func (m *PlatformAuth) AttachPrincipal() gin.HandlerFunc {
 			return
 		}
 		tokenStr := strings.TrimPrefix(header, "Bearer ")
-		claims, userID, err := m.verifier.Verify(tokenStr)
+		claims, err := m.verifier.Verify(tokenStr)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
+		}
+		// claims.Subject is a UUID for user principals and the client_id for
+		// service principals. UserID is left zero when it isn't a UUID.
+		var userID uuid.UUID
+		if claims.IsUser() {
+			if id, err := uuid.Parse(claims.Subject); err == nil {
+				userID = id
+			}
 		}
 		setPrincipal(c, userID, claims, claims.Permissions)
 		c.Next()
