@@ -28,7 +28,12 @@ COPY pkg/authclient ./pkg/authclient
 RUN go mod edit -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} && go mod download
 COPY . .
 ARG VERSION=dev
+# `COPY . .` restored go.mod from the build context, which still carries the
+# meta-repo-only `replace github.com/iag/fleet-iot => ../../../edge/Fleet_IoT`.
+# That path does not exist inside the build container, so re-apply the
+# vendored replace before invoking `go build`.
 RUN set -eu; \
+    go mod edit -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP}; \
     mkdir -p /out; \
     for cmd in . ./cmd/seed ./cmd/fleet-jobs ./cmd/telemetry-aggregate ./cmd/telemetry-purge ./cmd/healthcheck; do \
         name=$(basename $cmd); [ "$name" = "." ] && name=api; \
