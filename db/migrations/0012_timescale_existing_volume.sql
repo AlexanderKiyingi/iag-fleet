@@ -1,7 +1,21 @@
--- Upgrade databases that were created on plain postgres:16 before Timescale image/init.
--- Safe to re-run: extension and hypertable calls are idempotent.
+-- Upgrade databases that were created on plain postgres:16 before the
+-- Timescale image/init was wired in. Safe to re-run: extension load and
+-- hypertable creation are idempotent.
+--
+-- On Postgres installations where the timescaledb extension binary is NOT
+-- available (e.g. Railway's managed Postgres without the Timescale add-on)
+-- this migration is a no-op — telemetry_timeseries stays a regular heap
+-- table, matching the fallback path in 0010.
 
-CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+DO $fleet_iot$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb') THEN
+        EXECUTE 'CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE';
+    ELSE
+        RAISE NOTICE 'timescaledb extension not available on this Postgres — skipping hypertable conversion';
+    END IF;
+END
+$fleet_iot$;
 
 DO $fleet_iot$
 BEGIN

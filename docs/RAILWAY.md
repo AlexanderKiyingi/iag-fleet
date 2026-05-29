@@ -45,7 +45,7 @@ Inside Railway there is no Postgres on `127.0.0.1` — you need the **Railway Po
 6. Leave `AUTO_MIGRATE=true` (default) so pending migrations apply on each deploy (includes `telemetry_timeseries` + Timescale — see `deploy/postgres/TIMESCALE.md`).
 7. Redeploy the fleet service.
 
-For Postgres created before Timescale, run migration `0012_timescale_existing_volume` via `AUTO_MIGRATE` or follow `deploy/postgres/TIMESCALE.md`.
+For Postgres created before Timescale, run migration `0012_timescale_existing_volume` via `AUTO_MIGRATE` or follow `deploy/postgres/TIMESCALE.md`. On managed Postgres without the Timescale add-on (e.g. Railway's default), the migration is a no-op — `telemetry_timeseries` stays a regular heap table (same fallback as `0010`).
 
 The API also needs non-local URLs for auth/notifications when integrated; see `config/.env.production.example`.
 
