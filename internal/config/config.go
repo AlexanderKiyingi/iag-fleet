@@ -14,8 +14,6 @@ type Config struct {
 	Audience         string // aud claim the service requires on inbound tokens
 	GatewayAPIPrefix string
 	CORSOrigin       string
-	AppName          string
-	AppURL           string
 	PublicAPIURL     string
 	AutoMigrate      bool
 	KafkaBrokers     []string
@@ -34,8 +32,6 @@ func Load() (Config, error) {
 		Audience:         envOr("AUDIENCE", "iag.fleet"),
 		GatewayAPIPrefix: strings.TrimSpace(envOr("GATEWAY_API_PREFIX", "/api/v1/fleet")),
 		CORSOrigin:       envOr("CORS_ORIGIN", "http://localhost:3000"),
-		AppName:          envOr("APP_NAME", "IAG Fleet"),
-		AppURL:           envOr("APP_URL", "http://localhost:3000"),
 		PublicAPIURL:     strings.TrimRight(strings.TrimSpace(envOr("PUBLIC_API_URL", "")), "/"),
 		AutoMigrate:      envOr("AUTO_MIGRATE", "true") != "false",
 		EventBusEnabled:  strings.EqualFold(os.Getenv("EVENT_BUS_ENABLED"), "true"),
