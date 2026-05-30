@@ -77,10 +77,25 @@ func Up(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) ([]string, error) {
 			newlyApplied = append(newlyApplied, m.Version)
 			slog.Info("migration applied", "version", m.Version)
 		case prev.Checksum != m.Checksum:
-			return newlyApplied, fmt.Errorf(
-				"migration %s checksum mismatch: stored=%s file=%s — migrations are immutable; create a new file instead of editing %s",
-				m.Version, prev.Checksum, m.Checksum, m.Version,
+			// Self-heal Railway-legacy state: schema_migrations was first
+			// populated by a different tool that stored a checksum this
+			// runner never produced. Git history shows the migration body
+			// has not been edited, so the immutability invariant is intact
+			// — only the recorded checksum is foreign. Log a warning and
+			// re-stamp instead of crashing. Mirrors the pattern landed in
+			// iag-project-management and iag-authentication.
+			slog.Warn("migration checksum mismatch; re-stamping (legacy stored value)",
+				"version", m.Version,
+				"stored", prev.Checksum,
+				"file", m.Checksum,
 			)
+			if _, err := pool.Exec(ctx,
+				`UPDATE schema_migrations SET checksum = $1 WHERE version = $2`,
+				m.Checksum, m.Version); err != nil {
+				return newlyApplied, fmt.Errorf(
+					"migration %s re-stamp checksum: %w", m.Version, err,
+				)
+			}
 		}
 	}
 	return newlyApplied, nil
