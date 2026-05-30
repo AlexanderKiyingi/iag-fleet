@@ -69,13 +69,14 @@ func main() {
 		Issuer:   cfg.JWTIssuer,
 		Audience: cfg.Audience,
 	})
-	initCtx, refreshCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := verifier.Refresh(initCtx); err != nil {
-		refreshCancel()
-		slog.Error("jwks refresh", "err", err)
-		os.Exit(1)
-	}
-	refreshCancel()
+	// Tolerate transient JWKS failure on boot (auth gateway cold start,
+	// network blip, etc.) instead of os.Exit(1) + Railway restart loop.
+	// bootstrapJWKS retries with exponential backoff; if the budget is
+	// exhausted, the server still starts so /health stays green for
+	// Railway, the verifier returns "no verification key" until the
+	// background loop succeeds (fails closed), and the background loop
+	// continues to retry on its ticker.
+	bootstrapJWKS(verifier)
 	go jwksRefreshLoop(verifier)
 	platformAuth := fleetmw.NewPlatformAuth(fleetmw.PlatformAuthOptions{
 		Verifier: verifier,
@@ -204,6 +205,43 @@ func durationFromEnvSec(key string, defaultSec int) time.Duration {
 		return time.Duration(defaultSec) * time.Second
 	}
 	return time.Duration(n) * time.Second
+}
+
+// bootstrapJWKS performs an initial JWKS fetch with exponential backoff
+// so a transient failure (auth gateway cold start, network blip,
+// Client.Timeout while awaiting headers, etc.) does not crash the
+// container. Total budget ~2 minutes. Returns when keys are loaded or
+// the budget is exhausted; callers should kick off the background
+// refresh loop afterwards either way.
+func bootstrapJWKS(v *authclient.Verifier) {
+	backoff := time.Second
+	const (
+		maxBackoff   = 15 * time.Second
+		totalBudget  = 2 * time.Minute
+		perAttemptTO = 10 * time.Second
+	)
+	deadline := time.Now().Add(totalBudget)
+	for attempt := 1; ; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(context.Background(), perAttemptTO)
+		err := v.Refresh(attemptCtx)
+		cancel()
+		if err == nil {
+			slog.Info("jwks bootstrap ok", "attempt", attempt)
+			return
+		}
+		if time.Now().After(deadline) {
+			slog.Error("jwks bootstrap budget exhausted; continuing with empty key set", "attempts", attempt, "err", err)
+			return
+		}
+		slog.Warn("jwks bootstrap failed; retrying", "attempt", attempt, "err", err, "backoff", backoff)
+		time.Sleep(backoff)
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
 }
 
 func jwksRefreshLoop(v *authclient.Verifier) {
