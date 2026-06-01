@@ -99,18 +99,18 @@ func (r *Repository) Audit(ctx context.Context) ([]models.AuditEntry, error) {
 	return out, rows.Err()
 }
 
-// Log appends one audit entry. user_id is resolved by username lookup if
-// the username matches a registered account; otherwise the row records
-// the username string only.
+// Log appends one audit entry. user_id is always NULL post-platform-cutover:
+// the legacy local users table was dropped in 0007_drop_legacy_auth.sql, so
+// the row's "user" snapshot text column is the only audit identity record
+// (the platform JWT subject can be correlated with the auth service if
+// needed for forensics).
 func (r *Repository) Log(ctx context.Context, action, entity, id, details, user string) (models.AuditEntry, error) {
 	if user == "" {
 		user = "anonymous"
 	}
 	const q = `
         INSERT INTO audit_entries (action, entity, ref_id, details, user_id, "user")
-        VALUES ($1, $2, $3, NULLIF($4, ''),
-                (SELECT id FROM users WHERE username = $5),
-                $5)
+        VALUES ($1, $2, $3, NULLIF($4, ''), NULL, $5)
         RETURNING to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS ts,
                   action, entity, ref_id, COALESCE(details, ''), "user"`
 	var e models.AuditEntry
