@@ -66,10 +66,15 @@ Do **not** leave `ADDR=:4008` in Railway while `PORT` points at another port —
 |----------|--------|
 | `DATABASE_URL` | From Postgres plugin (see above) — **not** localhost |
 | `AUTO_MIGRATE` | `true` (default; applies pending migrations each deploy) |
-| `GATEWAY_INTERNAL_SECRET` | ≥16 chars |
-| `JWKS_URL`, `JWT_ISSUER` | Your auth service |
-| `AUTH_MODE` | `gateway` (default in Dockerfile) |
+| `JWKS_URL`, `JWT_ISSUER` | Your auth service — fleet verifies Bearer JWTs locally against this |
 | `CORS_ORIGIN`, `PUBLIC_API_URL` | Your frontend / gateway URLs |
+
+> **Auth (post hard-cutover):** fleet runs pure **Bearer+aud** — every
+> request must carry a JWT with `aud=iag.fleet`, verified locally via JWKS.
+> `AUTH_MODE` and `GATEWAY_INTERNAL_SECRET` are **no longer read by the
+> code** (the Dockerfile still sets `AUTH_MODE=gateway`, but it is a dead
+> no-op). Don't bother setting either on Railway; just point `JWKS_URL` /
+> `JWT_ISSUER` at the authentication service.
 
 `REDIS_URL` and Kafka are optional; the API starts without them.
 
@@ -82,4 +87,4 @@ Do **not** leave `ADDR=:4008` in Railway while `PORT` points at another port —
 
 ## Health check
 
-Railway probes `GET /ready` (`railway.toml`). Probes are **unauthenticated** — do not require `X-IAG-Gateway-Secret`. A `401` on `/ready` means an old build is running; redeploy after the gateway probe bypass fix.
+Railway probes `GET /ready` (`railway.toml`). Probes are **unauthenticated** by design (the health/readiness paths bypass the Bearer+aud middleware). A `401` on `/ready` means an old, pre-cutover build is running; redeploy `main`.

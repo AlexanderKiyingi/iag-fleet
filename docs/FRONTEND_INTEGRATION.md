@@ -76,29 +76,43 @@ Most common causes:
 
 | Environment | API base | SSE base |
 |---|---|---|
-| Local direct | `http://localhost:8082/api` | same |
+| Local direct | `http://localhost:4008/api` | same |
 | Local via gateway | `http://localhost:8080/api/v1/fleet/api` | same |
-| Production | `https://<gateway>/api/v1/fleet/api` | same |
+| Production | `https://iag-api-gateway-production.up.railway.app/api/v1/fleet/api` | same |
 
 **Always go through the gateway in non-local environments** — it owns rate
 limiting, CORS, request IDs, and routes `/api/v1/fleet/*` to this service.
+In production the only public host is the gateway
+(`https://iag-api-gateway-production.up.railway.app`); fleet itself runs on
+Railway's private network (`iag-fleet.railway.internal:4008`) and is not
+exposed via its own `*.up.railway.app` URL.
 
 ### Required frontend env vars
 
 ```env
-# Public — bundled into the client
+# Local (via gateway) — public, bundled into the client
 NEXT_PUBLIC_FLEET_API_URL=http://localhost:8080/api/v1/fleet/api
 NEXT_PUBLIC_AUTH_API_URL=http://localhost:8080/api/v1/authentication
 NEXT_PUBLIC_GATEWAY_ORIGIN=http://localhost:8080
 
 # Optional — when using a BFF for SSE proxying
-FLEET_API_INTERNAL_URL=http://fleet:8082/api
+FLEET_API_INTERNAL_URL=http://fleet:4008/api
+```
+
+```env
+# Production (Railway, via gateway) — public, bundled into the client
+NEXT_PUBLIC_FLEET_API_URL=https://iag-api-gateway-production.up.railway.app/api/v1/fleet/api
+NEXT_PUBLIC_AUTH_API_URL=https://iag-api-gateway-production.up.railway.app/api/v1/authentication
+NEXT_PUBLIC_GATEWAY_ORIGIN=https://iag-api-gateway-production.up.railway.app
+
+# Optional — BFF SSE proxying over Railway's private network
+FLEET_API_INTERNAL_URL=http://iag-fleet.railway.internal:4008/api
 ```
 
 ### CORS
 
 Fleet sets `Access-Control-Allow-Credentials: true` and allows the origins
-listed in `CORS_ORIGIN` (default `http://localhost:3000,http://localhost:5173`).
+listed in `CORS_ORIGIN` (comma-separated; default `http://localhost:3000`).
 **Auth is via the Authorization header — no cookies are required by fleet
 itself.** The Credentials flag exists for legacy compatibility.
 

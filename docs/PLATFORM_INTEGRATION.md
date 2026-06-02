@@ -8,24 +8,27 @@ Fleet is a domain microservice behind the **API gateway**, using **iag-authentic
 
 | Service | Integration | Mechanism |
 |---------|-------------|-----------|
-| **iag-authentication** | Users, groups, `fleet.*` permissions | Gateway JWT → `X-IAG-*` headers; optional direct JWKS in `AUTH_MODE=jwt` |
+| **iag-authentication** | Users, groups, `fleet.*` permissions | Bearer JWT verified locally via authentication JWKS (`aud=iag.fleet`) |
 | **iag-api-gateway** | Public ingress | Clients call `PUBLIC_API_URL/api/v1/fleet/api/...` |
 | **iag-notifications** | Critical email alerts | Kafka `iag.notifications` → `notification.requested` (`fleet.alert` template) |
 | **iag-finance** | Fuel purchase ledger | Kafka `iag.finance` → `fleet.fuel.recorded` on fuel record create/update |
 
-## Auth modes
+## Auth (post hard-cutover)
 
-| Mode | Use |
-|------|-----|
-| `gateway` | Production / Compose — trust `X-IAG-*` + `GATEWAY_INTERNAL_SECRET` |
-| `jwt` | Local dev without gateway — verify RS256 via authentication JWKS |
+Fleet runs a **single** auth path: every request (except the public health
+probes) must carry a Bearer JWT with `aud=iag.fleet`, verified locally
+against the authentication service's JWKS — no callback on the hot path.
+The old `gateway` header-trust mode (`X-IAG-*` + `GATEWAY_INTERNAL_SECRET`)
+was **removed** during the platform hard cutover; the code no longer reads
+`AUTH_MODE` or `GATEWAY_INTERNAL_SECRET`. See
+[FRONTEND_INTEGRATION.md §1](./FRONTEND_INTEGRATION.md) for the token flow.
 
 ## Environment
 
 | Variable | Purpose |
 |----------|---------|
-| `AUTH_MODE` | `gateway` (default) or `jwt` |
-| `GATEWAY_INTERNAL_SECRET` | Shared with api-gateway (min 16 chars) |
+| `JWKS_URL` | Authentication JWKS endpoint — fleet verifies Bearer JWTs against this |
+| `JWT_ISSUER` | Expected token issuer (authentication service) |
 | `PUBLIC_API_URL` | Gateway origin, e.g. `http://localhost:8080` |
 | `GATEWAY_API_PREFIX` | `/api/v1/fleet` |
 | `AUTHENTICATION_URL` | Health probe + docs, e.g. `http://authentication:3001` |
