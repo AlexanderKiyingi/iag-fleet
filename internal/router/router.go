@@ -75,6 +75,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	if opts.PlatformAuth != nil {
 		r.Use(opts.PlatformAuth.AttachPrincipal())
 	}
+	r.Use(fleetmw.RequestAudit(repo))
 
 	api := r.Group("/api")
 

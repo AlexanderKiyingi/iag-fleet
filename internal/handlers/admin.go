@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/alvor-technologies/iag-platform-go/apierr"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/models"
@@ -25,6 +26,7 @@ func (a *Admin) Register(rg *gin.RouterGroup) {
 
 	rg.GET("/audit", auth.RequirePerm("view_audit_entry"), a.listAudit)
 	rg.GET("/audit/search", auth.RequirePerm("view_audit_entry"), a.searchAudit)
+	rg.GET("/admin/audit-logs", auth.RequirePerm("view_audit_entry"), a.listAPIAuditLogs)
 	// POST /audit was deliberately removed: the audit log is append-only-
 	// by-system. Every domain action that should be auditable goes through
 	// Repository.LogBest from the relevant handler. Letting clients write
@@ -138,6 +140,16 @@ func (a *Admin) searchAudit(c *gin.Context) {
 		"limit":  effLimit,
 		"offset": f.Offset,
 	})
+}
+
+func (a *Admin) listAPIAuditLogs(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	items, total, err := a.Repo.ListAPIAuditLogs(c.Request.Context(), limit)
+	if err != nil {
+		apierr.JSON(c, http.StatusInternalServerError, apierr.CodeInternal, "could not list API audit logs")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total})
 }
 
 // parseAuditTime accepts RFC3339 or bare YYYY-MM-DD (interpreted as UTC

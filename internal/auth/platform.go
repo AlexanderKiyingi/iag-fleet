@@ -1,13 +1,13 @@
 package auth
 
 import (
-	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"github.com/alvor-technologies/iag-platform-go/authclient"
+	"github.com/alvor-technologies/iag-platform-go/apierr"
 	"github.com/iag/fleet-tool/backend/internal/ctxkeys"
 )
 
@@ -109,6 +109,6 @@ func RequireStaff() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "staff access required"})
+		apierr.Forbidden(c, "staff access required")
 	}
 }

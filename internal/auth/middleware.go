@@ -4,13 +4,15 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/alvor-technologies/iag-platform-go/apierr"
 )
 
 // RequireUser blocks anonymous access (platform principal required).
 func RequireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !IsAuthenticated(c) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			apierr.Unauthorized(c, "authentication required")
 			return
 		}
 		c.Next()
@@ -21,14 +23,12 @@ func RequireUser() gin.HandlerFunc {
 func RequirePerm(codename string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !IsAuthenticated(c) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			apierr.Unauthorized(c, "authentication required")
 			return
 		}
 		if !HasPerm(c, codename) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error": "permission denied",
-				"need":  codename,
-			})
+			apierr.WriteWith(c, http.StatusForbidden, apierr.CodeForbidden,
+				"permission denied: "+codename, gin.H{"required_permission": codename})
 			return
 		}
 		c.Next()
@@ -39,7 +39,7 @@ func RequirePerm(codename string) gin.HandlerFunc {
 func RequireAnyPerm(codenames ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !IsAuthenticated(c) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			apierr.Unauthorized(c, "authentication required")
 			return
 		}
 		for _, cn := range codenames {
@@ -48,10 +48,8 @@ func RequireAnyPerm(codenames ...string) gin.HandlerFunc {
 				return
 			}
 		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-			"error":   "permission denied",
-			"needAny": codenames,
-		})
+		apierr.WriteWith(c, http.StatusForbidden, apierr.CodeForbidden,
+			"permission denied", gin.H{"required_permission": codenames})
 	}
 }
 
@@ -63,9 +61,9 @@ func RequireSuperuser() gin.HandlerFunc {
 			return
 		}
 		if !IsAuthenticated(c) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			apierr.Unauthorized(c, "authentication required")
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "superuser only"})
+		apierr.Forbidden(c, "superuser access required")
 	}
 }

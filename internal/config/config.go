@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/alvor-technologies/iag-platform-go/corsenv"
 )
 
 // Config holds runtime settings for the fleet API.
@@ -35,7 +37,7 @@ func Load() (Config, error) {
 		JWKSURL:          envOr("JWKS_URL", strings.TrimRight(issuer, "/")+"/.well-known/jwks.json"),
 		Audience:         envOr("AUDIENCE", "iag.fleet"),
 		GatewayAPIPrefix: strings.TrimSpace(envOr("GATEWAY_API_PREFIX", "/api/v1/fleet")),
-		CORSOrigin:       envOr("CORS_ORIGIN", "http://localhost:3000"),
+		CORSOrigin:       corsenv.Allowlist(corsenv.DefaultDevOrigins),
 		PublicAPIURL:     strings.TrimRight(strings.TrimSpace(envOr("PUBLIC_API_URL", "")), "/"),
 		AutoMigrate:      envOr("AUTO_MIGRATE", "true") != "false",
 		EventBusEnabled:     strings.EqualFold(os.Getenv("EVENT_BUS_ENABLED"), "true"),

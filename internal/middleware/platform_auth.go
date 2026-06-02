@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/alvor-technologies/iag-platform-go/apierr"
 	"github.com/alvor-technologies/iag-platform-go/authclient"
 	"github.com/iag/fleet-tool/backend/internal/ctxkeys"
 )
@@ -46,7 +47,7 @@ func (m *PlatformAuth) AttachPrincipal() gin.HandlerFunc {
 			return
 		}
 		if m.verifier == nil {
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "jwt verifier not configured"})
+			apierr.Write(c, http.StatusServiceUnavailable, apierr.CodeServiceUnavailable, "JWT verifier not configured")
 			return
 		}
 		header := c.GetHeader("Authorization")
@@ -57,7 +58,7 @@ func (m *PlatformAuth) AttachPrincipal() gin.HandlerFunc {
 		tokenStr := strings.TrimPrefix(header, "Bearer ")
 		claims, err := m.verifier.Verify(tokenStr)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			apierr.Unauthorized(c, "invalid or expired token")
 			return
 		}
 		// User principals must carry a UUID subject — reject malformed ones
@@ -69,7 +70,7 @@ func (m *PlatformAuth) AttachPrincipal() gin.HandlerFunc {
 		if claims.IsUser() {
 			id, err := uuid.Parse(claims.Subject)
 			if err != nil {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+				apierr.Unauthorized(c, "invalid token subject")
 				return
 			}
 			userID = id
@@ -82,7 +83,7 @@ func (m *PlatformAuth) AttachPrincipal() gin.HandlerFunc {
 func (m *PlatformAuth) RequireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if _, ok := UserID(c); !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			apierr.Unauthorized(c, "authentication required")
 			return
 		}
 		c.Next()
