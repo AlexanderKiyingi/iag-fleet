@@ -18,6 +18,10 @@ type Config struct {
 	AutoMigrate      bool
 	KafkaBrokers     []string
 	EventBusEnabled  bool
+
+	ServiceClientID     string
+	ServiceClientSecret string
+	AuthTokenURL        string
 }
 
 // Load reads configuration from env. Hard cutover: no AUTH_MODE, no
@@ -34,7 +38,10 @@ func Load() (Config, error) {
 		CORSOrigin:       envOr("CORS_ORIGIN", "http://localhost:3000"),
 		PublicAPIURL:     strings.TrimRight(strings.TrimSpace(envOr("PUBLIC_API_URL", "")), "/"),
 		AutoMigrate:      envOr("AUTO_MIGRATE", "true") != "false",
-		EventBusEnabled:  strings.EqualFold(os.Getenv("EVENT_BUS_ENABLED"), "true"),
+		EventBusEnabled:     strings.EqualFold(os.Getenv("EVENT_BUS_ENABLED"), "true"),
+		ServiceClientID:     strings.TrimSpace(envOr("SERVICE_CLIENT_ID", "iag-fleet")),
+		ServiceClientSecret: os.Getenv("SERVICE_CLIENT_SECRET"),
+		AuthTokenURL:        strings.TrimSpace(envOr("AUTH_TOKEN_URL", strings.TrimRight(issuer, "/")+"/oauth/token")),
 	}
 	if brokers := strings.TrimSpace(os.Getenv("KAFKA_BROKERS")); brokers != "" {
 		for _, b := range strings.Split(brokers, ",") {

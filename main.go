@@ -26,6 +26,7 @@ import (
 	fleetmw "github.com/iag/fleet-tool/backend/internal/middleware"
 	"github.com/iag/fleet-tool/backend/internal/notifications"
 	"github.com/iag/fleet-tool/backend/internal/platform"
+	"github.com/iag/fleet-tool/backend/internal/platformregister"
 	"github.com/iag/fleet-tool/backend/internal/router"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -112,6 +113,8 @@ func main() {
 	if cfg.PublicAPIURL != "" {
 		platformSvc.PublicAPIURL = cfg.PublicAPIURL
 	}
+
+	go platformregister.PermissionsLoop(context.Background(), cfg)
 
 	r := router.New(repo, router.Options{
 		AllowedOrigin:       cfg.CORSOrigin,
