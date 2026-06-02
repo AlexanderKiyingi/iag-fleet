@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/alvor-technologies/iag-platform-go/apierr"
 	"github.com/alvor-technologies/iag-platform-go/authclient"
 )
 
@@ -28,13 +29,13 @@ func Principal(v *authclient.Verifier) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" || !strings.HasPrefix(header, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+			apierr.Unauthorized(c, "missing bearer token")
 			return
 		}
 		token := strings.TrimPrefix(header, "Bearer ")
 		claims, err := v.Verify(token)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			apierr.Unauthorized(c, "invalid or expired token")
 			return
 		}
 		c.Set(CtxClaims, claims)
@@ -54,11 +55,12 @@ func RequirePermission(perms ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, ok := ClaimsFrom(c)
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			apierr.Unauthorized(c, "authentication required")
 			return
 		}
 		if !claims.HasAnyPermission(perms...) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+			apierr.WriteWith(c, http.StatusForbidden, apierr.CodeForbidden,
+				"permission denied", gin.H{"required_permission": perms})
 			return
 		}
 		c.Next()
@@ -71,7 +73,7 @@ func RequireService() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, ok := ClaimsFrom(c)
 		if !ok || !claims.IsService() {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "service principal required"})
+			apierr.Forbidden(c, "service principal required")
 			return
 		}
 		c.Next()
@@ -83,7 +85,7 @@ func RequireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, ok := ClaimsFrom(c)
 		if !ok || !claims.IsUser() {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "user principal required"})
+			apierr.Forbidden(c, "user principal required")
 			return
 		}
 		c.Next()
