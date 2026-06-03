@@ -29,7 +29,13 @@ func (p *Platform) me(c *gin.Context) {
 		_ = p.Repo.Notifications.RegisterRecipient(c.Request.Context(), userID.String(), claims.Email)
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"mode": "platform",
+		"mode":        "platform",
+		"id":          userID.String(),
+		"email":       claims.Email,
+		"isStaff":     claims.IsStaff,
+		"isSuperuser": claims.IsSuperuser,
+		"groups":      claims.Groups,
+		"permissions": claims.Permissions,
 		"user": gin.H{
 			"id":          userID.String(),
 			"email":       claims.Email,
@@ -37,6 +43,5 @@ func (p *Platform) me(c *gin.Context) {
 			"isSuperuser": claims.IsSuperuser,
 			"groups":      claims.Groups,
 		},
-		"permissions": claims.Permissions,
 	})
 }
