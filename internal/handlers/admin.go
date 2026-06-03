@@ -181,9 +181,12 @@ type Snapshot struct {
 	Compliance []models.ComplianceItem  `json:"compliance,omitempty"`
 	Requests   []models.ServiceRequest  `json:"requests,omitempty"`
 	Tasks      []models.TaskItem        `json:"tasks,omitempty"`
-	Deployment []models.DeploymentDay   `json:"deployment,omitempty"`
-	Audit      []models.AuditEntry      `json:"audit,omitempty"`
-	Ticker     *models.OperatorTicker   `json:"ticker,omitempty"`
+	Deployment          []models.DeploymentDay        `json:"deployment,omitempty"`
+	Audit               []models.AuditEntry           `json:"audit,omitempty"`
+	Ticker              *models.OperatorTicker        `json:"ticker,omitempty"`
+	InspectionTemplates []models.InspectionTemplate   `json:"inspectionTemplates,omitempty"`
+	Inspections         []models.VehicleInspection    `json:"inspections,omitempty"`
+	PMSchedules         []models.PMSchedule             `json:"pmSchedules,omitempty"`
 }
 
 func (a *Admin) export(c *gin.Context) {
@@ -210,6 +213,12 @@ func (a *Admin) export(c *gin.Context) {
 		func(ctx context.Context) (err error) { snap.Tasks, err = a.Repo.Tasks.List(ctx); return },
 		func(ctx context.Context) (err error) { snap.Deployment, err = a.Repo.Deployment.List(ctx); return },
 		func(ctx context.Context) (err error) { snap.Audit, err = a.Repo.Audit(ctx); return },
+		func(ctx context.Context) (err error) {
+			snap.InspectionTemplates, err = a.Repo.InspectionTemplates.List(ctx)
+			return
+		},
+		func(ctx context.Context) (err error) { snap.Inspections, err = a.Repo.Inspections.List(ctx); return },
+		func(ctx context.Context) (err error) { snap.PMSchedules, err = a.Repo.PMSchedules.List(ctx); return },
 	}
 	for _, fn := range lists {
 		if err := fn(ctx); err != nil {
@@ -252,6 +261,24 @@ func (a *Admin) importAll(c *gin.Context) {
 		func() error { if snap.Requests == nil { return nil }; return a.Repo.Requests.SetAll(ctx, snap.Requests) },
 		func() error { if snap.Tasks == nil { return nil }; return a.Repo.Tasks.SetAll(ctx, snap.Tasks) },
 		func() error { if snap.Deployment == nil { return nil }; return a.Repo.Deployment.SetAll(ctx, snap.Deployment) },
+		func() error {
+			if snap.InspectionTemplates == nil {
+				return nil
+			}
+			return a.Repo.InspectionTemplates.SetAll(ctx, snap.InspectionTemplates)
+		},
+		func() error {
+			if snap.Inspections == nil {
+				return nil
+			}
+			return a.Repo.Inspections.SetAll(ctx, snap.Inspections)
+		},
+		func() error {
+			if snap.PMSchedules == nil {
+				return nil
+			}
+			return a.Repo.PMSchedules.SetAll(ctx, snap.PMSchedules)
+		},
 	}
 	for _, fn := range steps {
 		if err := fn(); err != nil {
@@ -288,6 +315,9 @@ func (a *Admin) reset(c *gin.Context) {
 		func() error { return a.Repo.Requests.SetAll(ctx, nil) },
 		func() error { return a.Repo.Tasks.SetAll(ctx, nil) },
 		func() error { return a.Repo.Deployment.SetAll(ctx, nil) },
+		func() error { return a.Repo.InspectionTemplates.SetAll(ctx, nil) },
+		func() error { return a.Repo.Inspections.SetAll(ctx, nil) },
+		func() error { return a.Repo.PMSchedules.SetAll(ctx, nil) },
 	}
 	for _, fn := range steps {
 		if err := fn(); err != nil {
