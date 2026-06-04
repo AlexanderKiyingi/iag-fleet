@@ -194,6 +194,20 @@ Workflows (multi-field / cross-entity transitions; logged to audit):
 
 ## Authentication & RBAC
 
+> **Platform IAM (use this):** Fleet verifies **JWTs** from central `iag-authentication`. Login and password flows are **not** implemented on the fleet API — use the gateway paths below.
+>
+> | Flow | Method | Gateway path |
+> |------|--------|----------------|
+> | Login | POST | `/api/v1/authentication/oauth/token` (`grant_type=password`) |
+> | Current user | GET | `/api/v1/authentication/v1/users/me` |
+> | Change password | POST | `/api/v1/authentication/v1/users/me/password` |
+> | Forgot password | POST | `/api/v1/authentication/v1/auth/forgot-password` |
+> | Reset password | POST | `/api/v1/authentication/v1/auth/reset-password` |
+>
+> See [`docs/ADMIN_API.md`](../../../docs/ADMIN_API.md) and [`shared/services/authentication/README.md`](../../../shared/services/authentication/README.md).
+
+The sections below describe the **legacy fleet-local** cookie/session auth model (reference only; superseded by platform IAM for new work).
+
 Modeled on Django's `auth.User` / `auth.Group` / `auth.Permission`.
 
 - **Users** have `is_active`, `is_staff`, `is_superuser` flags. Superusers bypass all permission checks.
