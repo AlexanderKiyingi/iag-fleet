@@ -20,6 +20,9 @@ func HasPerm(c *gin.Context, codename string) bool {
 	if claims.IsSuperuser {
 		return true
 	}
+	if platformAdminMayView(claims, codename) {
+		return true
+	}
 	for _, want := range []string{codename, fleetAlias(codename), legacyAlias(codename)} {
 		if claims.HasPermission(want) {
 			return true

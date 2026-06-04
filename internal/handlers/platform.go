@@ -28,6 +28,7 @@ func (p *Platform) me(c *gin.Context) {
 	if p.Repo != nil {
 		_ = p.Repo.Notifications.RegisterRecipient(c.Request.Context(), userID.String(), claims.Email)
 	}
+	perms := auth.EffectivePermissions(claims)
 	c.JSON(http.StatusOK, gin.H{
 		"mode":        "platform",
 		"id":          userID.String(),
@@ -35,13 +36,14 @@ func (p *Platform) me(c *gin.Context) {
 		"isStaff":     claims.IsStaff,
 		"isSuperuser": claims.IsSuperuser,
 		"groups":      claims.Groups,
-		"permissions": claims.Permissions,
+		"permissions": perms,
 		"user": gin.H{
 			"id":          userID.String(),
 			"email":       claims.Email,
 			"isStaff":     claims.IsStaff,
 			"isSuperuser": claims.IsSuperuser,
 			"groups":      claims.Groups,
+			"permissions": perms,
 		},
 	})
 }
