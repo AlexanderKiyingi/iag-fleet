@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-iot/iot"
+	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
 
@@ -30,7 +31,7 @@ import (
 //	HTTP ingestion runs on Fleet_IoT (see GET /api/iot/ingestion).
 //
 //	Replay / live (perm: view_telemetry on GPS/track endpoints)
-//	  GET    /api/vehicles/:id/track?from=&to=&limit=
+//	  GET    /api/vehicles/:id/track?from=&to=&limit=&after=
 //	  GET    /api/vehicles/:id/track/latest
 //	  GET    /api/vehicles/:id/track/stream    (SSE; emits whenever the latest ping changes)
 //
@@ -72,6 +73,8 @@ func (h *IoT) Register(rg *gin.RouterGroup) {
 	rg.GET("/vehicles/:id/track", auth.RequirePerm("view_telemetry"), h.requireStore, h.track)
 	rg.GET("/vehicles/:id/track/latest", auth.RequirePerm("view_telemetry"), h.requireStore, h.latest)
 	rg.GET("/vehicles/:id/track/stream", auth.RequirePerm("view_telemetry"), h.requireStore, h.stream)
+	rg.GET("/vehicles/:id/telemetry/daily", auth.RequirePerm("view_telemetry"), h.requireStore, h.telemetryDaily)
+	rg.POST("/vehicles/:id/trips/detect", auth.RequirePerm("change_trip"), h.requireStore, h.detectTrips)
 
 	rg.GET("/vehicles/:id/fuel/history", fuelRead, h.requireStore, h.fuelHistory)
 	rg.GET("/vehicles/:id/fuel/events", fuelRead, h.requireStore, h.fuelEvents)
@@ -321,6 +324,7 @@ func (h *IoT) testPing(c *gin.Context) {
 	if h.Hub != nil {
 		h.Hub.Publish(p)
 	}
+	_ = h.Store.ApplyGeofenceTransitions(ctx, iot.ProcessGeofences(p))
 	latest, err := h.Store.LatestPing(ctx, d.VehicleID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -352,7 +356,7 @@ var errUnknownVehicle = errors.New("unknown vehicle")
 func respondVehicleOr500(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, errUnknownVehicle):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "vehicle not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "vehicle not found"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
@@ -360,8 +364,19 @@ func respondVehicleOr500(c *gin.Context, err error) {
 
 // ─────────────────────────── Replay / live ──────────────────────────
 
+func (h *IoT) requireVehicleForTrack(c *gin.Context, vehicleID string) bool {
+	if err := h.ensureVehicle(c.Request.Context(), vehicleID); err != nil {
+		respondVehicleOr500(c, err)
+		return false
+	}
+	return true
+}
+
 func (h *IoT) latest(c *gin.Context) {
 	id := c.Param("id")
+	if !h.requireVehicleForTrack(c, id) {
+		return
+	}
 	p, err := h.Store.LatestPing(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -380,13 +395,66 @@ const maxFuelTelemetryRange = 31 * 24 * time.Hour
 
 func (h *IoT) track(c *gin.Context) {
 	id := c.Param("id")
+	if !h.requireVehicleForTrack(c, id) {
+		return
+	}
 	from, to, err := parseTrackRange(c, iot.MaxTrackReplayRange())
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	after, err := parseTrackAfter(c.Query("after"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	pings, err := h.Store.Track(c.Request.Context(), id, from, to, limit)
+	pings, err := h.Store.Track(c.Request.Context(), id, from, to, limit, after)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	resp := gin.H{
+		"vehicleId": id,
+		"from":      from,
+		"to":        to,
+		"pings":     pings,
+		"count":     len(pings),
+	}
+	if len(pings) > 0 {
+		maxRows := iot.MaxTrackRowLimit()
+		effectiveLimit := limit
+		if effectiveLimit <= 0 {
+			effectiveLimit = 5000
+		}
+		if effectiveLimit > maxRows {
+			effectiveLimit = maxRows
+		}
+		if len(pings) >= effectiveLimit {
+			last := pings[len(pings)-1].TS
+			resp["nextAfter"] = last
+			resp["hasMore"] = true
+		}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+const ssePollInterval = 2 * time.Second
+
+// maxDailyTelemetryRange allows reading rolled-up history beyond raw ping retention.
+const maxDailyTelemetryRange = 365 * 24 * time.Hour
+
+func (h *IoT) telemetryDaily(c *gin.Context) {
+	id := c.Param("id")
+	if !h.requireVehicleForTrack(c, id) {
+		return
+	}
+	from, to, err := parseTrackRange(c, maxDailyTelemetryRange)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	rows, err := h.Store.ListDailySummaries(c.Request.Context(), id, from, to)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -395,12 +463,143 @@ func (h *IoT) track(c *gin.Context) {
 		"vehicleId": id,
 		"from":      from,
 		"to":        to,
-		"pings":     pings,
-		"count":     len(pings),
+		"days":      rows,
+		"count":     len(rows),
 	})
 }
 
-const ssePollInterval = 2 * time.Second
+type detectTripsBody struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+func (h *IoT) detectTrips(c *gin.Context) {
+	id := c.Param("id")
+	if !h.requireVehicleForTrack(c, id) {
+		return
+	}
+	if h.Repo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "repository not configured"})
+		return
+	}
+	from, to, err := parseDetectTripsRange(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx := c.Request.Context()
+	pings, err := h.Store.Track(ctx, id, from, to, iot.MaxTrackRowLimit(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	detected := iot.DetectTripsFromPings(id, pings)
+	driverID := ""
+	if veh, err := h.Repo.Vehicles.Get(ctx, id); err == nil {
+		driverID = veh.DriverID
+	}
+	existing, _ := h.Repo.Trips.List(ctx)
+	created := make([]models.Trip, 0, len(detected))
+	for _, d := range detected {
+		if tripExists(existing, id, d.StartedAt) {
+			continue
+		}
+		if driverID == "" {
+			driverID = "UNKNOWN"
+		}
+		trip := models.Trip{
+			ID:            generateID("TRP"),
+			DriverID:      driverID,
+			VehicleID:     id,
+			Date:          d.StartedAt.UTC().Format("2006-01-02"),
+			StartLocation: d.StartLocation,
+			EndLocation:   d.EndLocation,
+			DistanceKm:    d.DistanceKm,
+			DurationMin:   d.DurationMin,
+			FuelL:         0,
+			Status:        "completed",
+			StartedAt:     d.StartedAt.UTC().Format(time.RFC3339),
+			EndedAt:       d.EndedAt.UTC().Format(time.RFC3339),
+			AutoGenerated: true,
+			Notes:         "Detected from telemetry",
+		}
+		saved, err := h.Repo.Trips.Add(ctx, trip)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		created = append(created, saved)
+		existing = append(existing, saved)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"vehicleId": id,
+		"from":      from,
+		"to":        to,
+		"detected":  len(detected),
+		"created":   len(created),
+		"trips":     created,
+	})
+}
+
+func parseDetectTripsRange(c *gin.Context) (from, to time.Time, err error) {
+	now := time.Now().UTC()
+	to = now
+	from = now.Add(-24 * time.Hour)
+	if v := c.Query("from"); v != "" {
+		from, err = time.Parse(time.RFC3339, v)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("from: %w", err)
+		}
+	} else if c.Request.ContentLength > 0 || c.ContentType() == "application/json" {
+		var body detectTripsBody
+		if err := c.ShouldBindJSON(&body); err == nil {
+			if body.From != "" {
+				from, err = time.Parse(time.RFC3339, body.From)
+				if err != nil {
+					return time.Time{}, time.Time{}, fmt.Errorf("from: %w", err)
+				}
+			}
+			if body.To != "" {
+				to, err = time.Parse(time.RFC3339, body.To)
+				if err != nil {
+					return time.Time{}, time.Time{}, fmt.Errorf("to: %w", err)
+				}
+			}
+		}
+	}
+	if v := c.Query("to"); v != "" {
+		to, err = time.Parse(time.RFC3339, v)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("to: %w", err)
+		}
+	}
+	if !to.After(from) {
+		return time.Time{}, time.Time{}, fmt.Errorf("'to' must be after 'from'")
+	}
+	if to.Sub(from) > iot.MaxTrackReplayRange() {
+		return time.Time{}, time.Time{}, fmt.Errorf("range capped at %d days; use multiple requests", int(iot.MaxTrackReplayRange()/(24*time.Hour)))
+	}
+	return from, to, nil
+}
+
+func tripExists(existing []models.Trip, vehicleID string, started time.Time) bool {
+	for _, t := range existing {
+		if t.VehicleID != vehicleID || !t.AutoGenerated {
+			continue
+		}
+		if t.StartedAt == "" {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, t.StartedAt)
+		if err != nil {
+			continue
+		}
+		if ts.Equal(started) || ts.Sub(started).Abs() < time.Minute {
+			return true
+		}
+	}
+	return false
+}
 
 // stream emits Server-Sent Events for live tracking. Each connected client
 // subscribes to its in-process broker AND polls the DB every 2s as a
@@ -408,6 +607,9 @@ const ssePollInterval = 2 * time.Second
 // pings reach this loop only via the polled DB query, not the broker).
 func (h *IoT) stream(c *gin.Context) {
 	vehicleID := c.Param("id")
+	if !h.requireVehicleForTrack(c, vehicleID) {
+		return
+	}
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
@@ -596,6 +798,18 @@ func parseTrackRange(c *gin.Context, maxSpan time.Duration) (from, to time.Time,
 		return time.Time{}, time.Time{}, fmt.Errorf("range capped at %d days for this endpoint; use multiple requests for longer windows", days)
 	}
 	return from, to, nil
+}
+
+func parseTrackAfter(v string) (*time.Time, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return nil, fmt.Errorf("after: %w", err)
+	}
+	return &t, nil
 }
 
 func respondIotError(c *gin.Context, err error) {

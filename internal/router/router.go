@@ -102,9 +102,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 		Repo: repo, Collection: repo.Drivers, Entity: "driver", IDPrefix: "DRV",
 	}).Register(api, "/drivers")
 
-	(&handlers.Resource[models.JMP, *models.JMP]{
-		Repo: repo, Collection: repo.JMPs, Entity: "jmp", IDPrefix: "JMP",
-	}).Register(api, "/jmps")
+	handlers.NewJMPs(repo, opts.RoutingOSRMURL).Register(api, "/jmps")
 
 	(&handlers.Resource[models.Cargo, *models.Cargo]{
 		Repo: repo, Collection: repo.Cargo, Entity: "cargo", IDPrefix: "CRG",
@@ -154,7 +152,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	(&handlers.Admin{Repo: repo, Cache: opts.Cache}).Register(api)
 	(&handlers.Reference{Cache: opts.Cache, TTL: opts.TTLReference}).Register(api)
-	(&handlers.Workflows{Repo: repo, Events: opts.Events}).Register(api)
+	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL}).Register(api)
 	(&handlers.Inspections{Repo: repo}).Register(api)
 	(&handlers.PMSchedules{Repo: repo}).Register(api)
 	(&handlers.Dashboard{Repo: repo, Cache: opts.Cache, TTL: opts.TTLDashboard}).Register(api)
@@ -275,7 +273,7 @@ func getRequestTimeout() time.Duration {
 func requestTimeout(timeout time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if timeout <= 0 || strings.HasSuffix(path, "/track/stream") {
+		if timeout <= 0 || strings.HasSuffix(path, "/stream") {
 			c.Next()
 			return
 		}

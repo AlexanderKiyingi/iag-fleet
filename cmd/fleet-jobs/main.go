@@ -19,6 +19,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/jobs"
+	"github.com/iag/fleet-tool/backend/internal/store"
 )
 
 func main() {
@@ -26,6 +27,8 @@ func main() {
 	doAgg := flag.Bool("aggregate", false, "roll raw pings into telemetry_daily / fuel_events")
 	doPurge := flag.Bool("purge", false, "delete raw pings older than retention")
 	doLink := flag.Bool("link-fuel", false, "match telemetry refuel events to fuel_records")
+	doStale := flag.Bool("mark-stale", false, "set moving/idle vehicles offline when telemetry is stale")
+	doDetectTrips := flag.Bool("detect-trips", false, "create auto_generated trips from telemetry in range")
 	linkDays := flag.Int("link-days", 90, "lookback days for --link-fuel")
 	purgeDays := flag.Int("purge-days", 365, "retention window for --purge / --all (days)")
 	fromFlag := flag.String("from", "", "aggregate: first day YYYY-MM-DD UTC (default yesterday)")
@@ -40,8 +43,10 @@ func main() {
 	runAgg := *doAll || *doAgg
 	runPurge := *doAll || *doPurge
 	runLink := *doLink
-	if !runAgg && !runPurge && !runLink {
-		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, --purge, and/or --link-fuel")
+	runStale := *doAll || *doStale
+	runDetect := *doAll || *doDetectTrips
+	if !runAgg && !runPurge && !runLink && !runStale && !runDetect {
+		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, --purge, --mark-stale, --detect-trips, and/or --link-fuel")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -54,7 +59,7 @@ func main() {
 		log.Fatalf("connect Postgres: %v", err)
 	}
 	defer pool.Close()
-	store := iot.NewStore(pool)
+	iotStore := iot.NewStore(pool)
 
 	eventBus := events.NewFromEnv()
 	defer func() { _ = eventBus.Close() }()
@@ -68,7 +73,7 @@ func main() {
 			log.Fatalf("aggregate range: %v", err)
 		}
 		log.Printf("fleet-jobs: aggregating %s .. %s", from.Format(jobs.DayLayout), to.Add(-time.Nanosecond).Format(jobs.DayLayout))
-		written, ev, failed, err := jobs.AggregateTelemetry(ctxAgg, store, eventBus, pool, from, to, *vehicleFlag)
+		written, ev, failed, err := jobs.AggregateTelemetry(ctxAgg, iotStore, eventBus, pool, from, to, *vehicleFlag)
 		if err != nil {
 			log.Fatalf("aggregate: %v", err)
 		}
@@ -101,10 +106,34 @@ func main() {
 	if runPurge {
 		ctxPurge, cancelPurge := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancelPurge()
-		n, err := jobs.PurgeTelemetryPings(ctxPurge, store, *purgeDays)
+		n, err := jobs.PurgeTelemetryPings(ctxPurge, iotStore, *purgeDays)
 		if err != nil {
 			log.Fatalf("purge: %v", err)
 		}
 		log.Printf("fleet-jobs purge: deleted %d raw pings (retain %d days)", n, *purgeDays)
+	}
+
+	if runStale {
+		ctxStale, cancelStale := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancelStale()
+		n, err := jobs.MarkStaleVehiclesOffline(ctxStale, iotStore)
+		if err != nil {
+			log.Fatalf("mark-stale: %v", err)
+		}
+		log.Printf("fleet-jobs mark-stale: %d vehicles set offline", n)
+	}
+
+	if runDetect {
+		from, to, err := jobs.ResolveAggregateRange(*fromFlag, *toFlag)
+		if err != nil {
+			log.Fatalf("detect-trips range: %v", err)
+		}
+		repo := store.NewRepository(pool)
+		n, err := jobs.DetectTripsFromTelemetry(ctxAgg, iotStore, repo, from, to)
+		if err != nil {
+			log.Fatalf("detect-trips: %v", err)
+		}
+		log.Printf("fleet-jobs detect-trips: created %d trips (%s .. %s)",
+			n, from.Format(jobs.DayLayout), to.Add(-time.Nanosecond).Format(jobs.DayLayout))
 	}
 }

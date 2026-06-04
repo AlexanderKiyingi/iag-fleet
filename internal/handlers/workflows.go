@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/events"
+	jmpplan "github.com/iag/fleet-tool/backend/internal/jmp"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -19,13 +20,15 @@ import (
 // Workflows owns endpoints that encode multi-field or cross-entity state
 // transitions — the operations the frontend currently does as ad-hoc patches.
 type Workflows struct {
-	Repo   *store.Repository
-	Events *events.Bus
+	Repo           *store.Repository
+	Events         *events.Bus
+	RoutingOSRMURL string
 }
 
 func (w *Workflows) Register(rg *gin.RouterGroup) {
 	// JMPs
 	rg.POST("/jmps/:id/complete-toolbox", auth.RequirePerm("complete_toolbox_jmp"), w.completeToolbox)
+	rg.POST("/jmps/:id/complete", auth.RequirePerm("complete_jmp"), w.completeJmp)
 	rg.POST("/jmps/:id/cancel", auth.RequirePerm("cancel_jmp"), w.cancelJmp)
 	rg.POST("/jmps/:id/approve-mileage", auth.RequirePerm("approve_mileage_jmp"), w.approveMileage)
 
@@ -110,6 +113,43 @@ func (w *Workflows) cancelJmp(c *gin.Context) {
 	}
 	w.Repo.LogBest(ctx, "cancel", "jmp", id, "", currentUser(c, w.Repo))
 	w.emitFleet(ctx, events.TypeJMPCancelled, map[string]string{"jmpId": id}, id)
+	c.JSON(http.StatusOK, updated)
+}
+
+func (w *Workflows) completeJmp(c *gin.Context) {
+	id := c.Param("id")
+	ctx := c.Request.Context()
+	existing, err := w.Repo.JMPs.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if existing.Status == "completed" {
+		c.JSON(http.StatusConflict, gin.H{"error": "JMP already completed"})
+		return
+	}
+	if existing.Status == "cancelled" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot complete a cancelled JMP"})
+		return
+	}
+	if existing.Status != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":  "JMP must be active before completion (complete toolbox first)",
+			"status": existing.Status,
+		})
+		return
+	}
+	updated, err := w.Repo.JMPs.Update(ctx, id, func(j *models.JMP) {
+		j.Status = "completed"
+		j.CompletedAt = nowISO()
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	user := currentUser(c, w.Repo)
+	w.Repo.LogBest(ctx, "complete", "jmp", id, "", user)
+	w.emitFleet(ctx, events.TypeJMPCompleted, map[string]string{"jmpId": id, "status": "completed"}, id)
 	c.JSON(http.StatusOK, updated)
 }
 
@@ -461,7 +501,7 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 	if expectedReturn == "" {
 		expectedReturn = req.StartDate
 	}
-	expectedDays := computeExpectedDays(req.StartDate, expectedReturn)
+	expectedDays := jmpplan.ComputeExpectedDays(req.StartDate, expectedReturn)
 
 	cargoDescription := req.CargoType
 	if cargoDescription == "" && req.Pax != nil {
@@ -491,6 +531,8 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 		SourceRequestID:   req.ID,
 	}
 
+	jmpplan.Enrich(ctx, &jmp, w.RoutingOSRMURL)
+
 	created, err := w.Repo.JMPs.Add(ctx, jmp)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -515,26 +557,6 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 
 	w.Repo.LogBest(ctx, "create-jmp", "request", req.ID, created.ID, user)
 	c.JSON(http.StatusCreated, created)
-}
-
-// computeExpectedDays mirrors the calculation the frontend used inline:
-// (endMs - startMs)/86400000 + 1, floor 1. Both dates are YYYY-MM-DD;
-// parsing failures default to a single-day plan.
-func computeExpectedDays(startDate, endDate string) int {
-	const day = 24 * time.Hour
-	start, err := time.Parse("2006-01-02", startDate)
-	if err != nil {
-		return 1
-	}
-	end, err := time.Parse("2006-01-02", endDate)
-	if err != nil {
-		return 1
-	}
-	d := int(end.Sub(start)/day) + 1
-	if d < 1 {
-		return 1
-	}
-	return d
 }
 
 // ───────────────────────────── Tasks ─────────────────────────────

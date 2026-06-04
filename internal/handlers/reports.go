@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
+	fuelmetrics "github.com/iag/fleet-tool/backend/internal/fuel"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -36,7 +37,7 @@ type reportSummary struct {
 	TotalKm        int            `json:"totalKm"`
 	TotalLitres    float64        `json:"totalLitres"`
 	TotalSpendUgx  float64        `json:"totalSpendUgx"`
-	CostPerKmUgx   int            `json:"costPerKmUgx"`
+	CostPerKmUgx   int            `json:"costPerKmUgx"` // fuel_records ODO deltas in window (same as /analytics/summary)
 	MaintenanceUgx float64        `json:"maintenanceUgx"`
 	WorkOrders     int            `json:"workOrders"`
 	Safety         map[string]int `json:"safetyBySeverity"`
@@ -77,7 +78,6 @@ func (r *Reports) summary(c *gin.Context) {
 	mx, _ := r.Repo.Maintenance.List(ctx)
 	safety, _ := r.Repo.Safety.List(ctx)
 	cargo, _ := r.Repo.Cargo.List(ctx)
-	trips, _ := r.Repo.Trips.List(ctx)
 
 	vehByID := map[string]models.Vehicle{}
 	for _, v := range vehicles {
@@ -126,18 +126,22 @@ func (r *Reports) summary(c *gin.Context) {
 		fuelBuckets[i].Label = d.Format("02 Jan")
 	}
 
-	var totalKm float64
-	for _, t := range trips {
-		if !inScopeVehicle(t.VehicleID) {
+	windowStart := start.Format("2006-01-02")
+	scopeFuel := make([]models.FuelRecord, 0, len(fuel))
+	for _, f := range fuel {
+		if !inScopeVehicle(f.VehicleID) {
 			continue
 		}
-		totalKm += t.DistanceKm
+		if scope == "driver" && scopeID != "" && f.DriverID != scopeID {
+			continue
+		}
+		if f.Date >= windowStart {
+			scopeFuel = append(scopeFuel, f)
+		}
 	}
-	totalKmInt := int(totalKm)
-	cpkm := 0
-	if totalKmInt > 0 {
-		cpkm = int(totalU / float64(totalKmInt))
-	}
+	cost := fuelmetrics.ComputeCostMetrics(scopeFuel, windowStart, fuelmetrics.DefaultPayloadTonnes)
+	totalKmInt := int(cost.TotalKm)
+	cpkm := cost.CostPerKm
 
 	statusCount := map[string]int{"moving": 0, "idle": 0, "maintenance": 0, "offline": 0}
 	for _, v := range vehicles {

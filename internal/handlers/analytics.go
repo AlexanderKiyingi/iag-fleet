@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/cache"
+	fuelmetrics "github.com/iag/fleet-tool/backend/internal/fuel"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -35,9 +36,8 @@ type analyticsKpis struct {
 	Moving        int     `json:"moving"`
 	UtilPct       int     `json:"utilPct"`
 	TotalOdo      float64 `json:"totalOdo"`
-	// Cost/km uses (sum of fuel.total) / (sum of vehicle ODO deltas) over
-	// the last 30 days. Cost/t-km is the same divided by an assumed 8-tonne
-	// average payload — same heuristic the v4 analytics screen used.
+	// Cost/km uses fuel_records ODO deltas over the last 30 days (see fuel.ComputeCostMetrics).
+	// Cost/t-km divides by the configured payload-tonne heuristic (default 8 t).
 	CostPerKm  int     `json:"costPerKm"`
 	CostPerTKm int     `json:"costPerTKm"`
 	FuelCost30d float64 `json:"fuelCost30d"`
@@ -159,49 +159,11 @@ func computeAnalyticsKpis(vehicles []models.Vehicle, fuel []models.FuelRecord) a
 		k.UtilPct = int((float64(k.Moving) / float64(len(vehicles))) * 100.0)
 	}
 
-	// 30-day cost/km: take the last 30 days of fuel records, sum their
-	// total cost, divide by the per-vehicle ODO delta (last - first
-	// record). Vehicles with only one record contribute cost but no km;
-	// we count both globally so partial coverage doesn't blow up the math.
-	cutoff := time.Now().UTC().AddDate(0, 0, -30).Format("2006-01-02")
-	type window struct {
-		first, last float64
-		hasFirst    bool
-	}
-	byVeh := make(map[string]*window)
-	totalCost := 0.0
-	// We need the records sorted by date so first/last reflect the window
-	// ends, not insertion order. Sorting in place is fine — we don't reuse
-	// the slice afterwards.
-	sort.SliceStable(fuel, func(i, j int) bool { return fuel[i].Date < fuel[j].Date })
-	for _, f := range fuel {
-		if f.Date < cutoff {
-			continue
-		}
-		totalCost += f.Total
-		w := byVeh[f.VehicleID]
-		if w == nil {
-			w = &window{}
-			byVeh[f.VehicleID] = w
-		}
-		if !w.hasFirst {
-			w.first = f.Odo
-			w.hasFirst = true
-		}
-		w.last = f.Odo
-	}
-	totalKm := 0.0
-	for _, w := range byVeh {
-		if w.hasFirst && w.last > w.first {
-			totalKm += w.last - w.first
-		}
-	}
-	k.FuelCost30d = totalCost
-	if totalKm > 0 {
-		k.CostPerKm = int(totalCost / totalKm)
-		// 8-tonne assumed payload — same heuristic the v4 spreadsheet used.
-		k.CostPerTKm = int(totalCost / (totalKm * 8))
-	}
+	cutoff := fuelmetrics.CutoffDaysAgo(30)
+	metrics := fuelmetrics.ComputeCostMetrics(fuel, cutoff, fuelmetrics.DefaultPayloadTonnes)
+	k.FuelCost30d = metrics.TotalCost
+	k.CostPerKm = metrics.CostPerKm
+	k.CostPerTKm = metrics.CostPerTKm
 	return k
 }
 

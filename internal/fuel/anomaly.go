@@ -13,7 +13,7 @@ func EnrichAnomaly(rec *models.FuelRecord) {
 	if rec == nil {
 		return
 	}
-	base := baseDieselPrice()
+	base := BaseDieselPriceUGX()
 	rec.Total = math.Round(rec.Litres * rec.UnitPrice)
 
 	anomaly := false
@@ -48,7 +48,8 @@ func EnrichAnomaly(rec *models.FuelRecord) {
 	}
 }
 
-func baseDieselPrice() float64 {
+// BaseDieselPriceUGX is the reference diesel price for anomaly checks and JMP budgeting.
+func BaseDieselPriceUGX() float64 {
 	if v := os.Getenv("FLEET_BASE_DIESEL_UGX"); v != "" {
 		if n, err := strconv.ParseFloat(v, 64); err == nil && n > 0 {
 			return n

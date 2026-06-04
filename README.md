@@ -81,7 +81,7 @@ Additional binaries (under `cmd/`):
 | `iot-gateway`        | Native Teltonika Codec 8/8E **TCP** listener (default `:5027`)     |
 | `telemetry-aggregate`| Rolls raw pings into `telemetry_daily` (intended for nightly cron, just after midnight UTC) |
 | `telemetry-purge`    | Drops telemetry pings older than `--days` (intended for nightly cron) |
-| `fleet-jobs`         | Runs aggregate and/or purge in one invocation (`--all`, `--aggregate`, `--purge`) for cron/Kubernetes |
+| `fleet-jobs`         | Runs aggregate, purge, link-fuel, and mark-stale (`--all`, `--aggregate`, `--purge`, `--mark-stale`) for cron/Kubernetes |
 
 ## Database (Postgres)
 
@@ -174,14 +174,18 @@ Reference data (no auth, cacheable):
 | GET    | `/api/reference`        | enums: departments, safety/doc types, statuses, etc. |
 | GET    | `/api/reference/geo`    | POIs, corridors, basemaps                            |
 | GET    | `/api/dashboard/summary`| KPIs, cargo pipeline, ranked alert feed              |
+| GET    | `/api/analytics/summary`| Fleet analytics rollups (cached); `costPerKm` uses fuel ODO deltas |
+| GET    | `/api/reports/summary`  | Period/scope reports; `costPerKmUgx` uses the same ODO-based formula |
 
 Workflows (multi-field / cross-entity transitions; logged to audit):
 
 | Method | Path                                            | Behaviour                                                                          |
 | ------ | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
 | POST   | `/api/jmps/:id/complete-toolbox`                | force all 8 toolbox items checked, mark complete, transition `pending-toolbox→active` |
+| POST   | `/api/jmps/:id/complete`                        | mark `active` JMP `completed` + `completedAt` (perm: `complete_jmp`)             |
 | POST   | `/api/jmps/:id/cancel`                          | set status `cancelled`                                                             |
 | POST   | `/api/jmps/:id/approve-mileage` `{approved,notes}` | stamp `mileageStatus`, `approvedBy`, `approvedAt`                              |
+| POST   | `/api/requests/:id/create-jmp`                  | draft JMP from assigned request; fills distance/fuel/budget when POI match + `ROUTING_OSRM_URL` |
 | POST   | `/api/cargo/:id/set-stage` `{stage,note?}`      | jump to stage, append history event, auto-set `arrivalAcp` on `at-acp`             |
 | POST   | `/api/cargo/:id/advance-stage`                  | move to the next stage in `CargoStages` order                                      |
 | POST   | `/api/cargo/:id/offload`                        | terminal `offloaded` + stamp `offloadingDate`                                      |
@@ -431,7 +435,7 @@ Both paths call `iot.Store.InsertPings` (`pgx.CopyFrom` into `telemetry_timeseri
 | DELETE | `/api/iot/devices/:id`                     | `manage_iot_device`      | remove device                                     |
 | POST   | `/api/iot/devices/:id/rotate-key`          | `manage_iot_device`      | issue a fresh API key (returns plaintext once)    |
 | POST   | `/api/iot/pings` (Fleet_IoT, not fleet API) | device `Authorization`  | bulk-ingest pings. See `GET /api/iot/ingestion` on fleet for URLs. |
-| GET    | `/api/vehicles/:id/track?from=&to=&limit=` | `view_telemetry`         | playback over a time window (range capped at **14 days**, max 50,000 rows). RFC3339 timestamps. |
+| GET    | `/api/vehicles/:id/track?from=&to=&limit=&after=` | `view_telemetry` | playback over a time window (range capped at **30 days** default via `TELEMETRY_TRACK_MAX_DAYS`, max 50,000 rows). `after` (RFC3339) cursor for pagination. Unknown vehicle → 404. |
 | GET    | `/api/vehicles/:id/track/latest`           | `view_telemetry`         | most recent ping                                  |
 | GET    | `/api/vehicles/:id/track/stream`           | `view_telemetry`         | **SSE** live stream (`event: ping` frames). 2-second poll fallback for cross-process pings (gateway). |
 | GET    | `/api/vehicles/live/stream`                | `view_vehicle` *or* `view_telemetry` | **SSE** fleet snapshot (`event: fleet` every ~3s) — vehicle hot positions from DB, powers the Next.js map shell. |
@@ -440,7 +444,17 @@ Both paths call `iot.Store.InsertPings` (`pgx.CopyFrom` into `telemetry_timeseri
 
 - `iot_devices(id, serial, label, vehicle_id, api_key_hash, is_active, last_seen, last_ip, created_at)` — physical units. `api_key_hash` is `sha256(plaintext)` — plaintext is shown once on creation/rotate.
 - `telemetry_timeseries(...)` — raw position fixes (Timescale hypertable on `ts` when the extension is installed; see migration `0010_telemetry_timeseries.sql`). `raw` JSONB holds the full device IO map. Indexed by `(vehicle_id, ts DESC)` btree + BRIN on `ts`.
-- `telemetry_daily(vehicle_id, day, ping_count, distance_km, max_speed_kmh, avg_speed_kmh, fuel_used_litres, moving_minutes, idle_minutes, first_ping, last_ping)` — survives raw retention (populated by a future `cmd/telemetry-aggregate`).
+- `telemetry_daily(vehicle_id, day, ping_count, distance_km, max_speed_kmh, avg_speed_kmh, fuel_used_litres, moving_minutes, idle_minutes, first_ping, last_ping)` — survives raw retention (populated by `cmd/telemetry-aggregate` / `fleet-jobs --aggregate`).
+
+Ingest updates `vehicles.status` to `moving` / `idle` from speed (≥5 km/h), preserving `maintenance`. `fleet-jobs --mark-stale` (included in `--all`) sets `offline` when `last_seen` exceeds `FLEET_TELEMETRY_STALE_MINUTES` (default 15). **Redis (`REDIS_URL`) is required** when Fleet API and Fleet_IoT run as separate processes so fleet live SSE receives sub-second updates; without Redis, live map falls back to ~3s DB polling.
+
+**Dedup:** `(vehicle_id, ts)` is unique on `telemetry_timeseries`; duplicate ingests are ignored.
+
+**Geofences:** Enter/exit on reference POIs (ACP, ports, Malaba, etc.) creates `safety_events` with `reportedBy: Geofence`.
+
+**Trips:** `POST /api/vehicles/:id/trips/detect` or `fleet-jobs --detect-trips` (in `--all`) builds `auto_generated` trips from GPS segments.
+
+**Long-range history:** `GET /api/vehicles/:id/telemetry/daily` reads `telemetry_daily` (survives raw ping purge).
 
 ### Volume + retention decisions
 
@@ -454,7 +468,10 @@ Sized for **~50 vehicles × 1 ping/min ≈ 26M pings/year**. Defaults:
 
 ```cron
 05 0 * * *  cd /opt/haula-backend && DATABASE_URL=... go run ./cmd/fleet-jobs --all --purge-days 365
+*/5 * * * * cd /opt/haula-backend && DATABASE_URL=... go run ./cmd/fleet-jobs --mark-stale
 ```
+
+`--all` runs aggregate, link-fuel, purge, and mark-stale once nightly. The 5-minute `mark-stale` job keeps offline detection aligned with `FLEET_TELEMETRY_STALE_MINUTES`.
 
 Equivalent split (same effect as `--all`):
 

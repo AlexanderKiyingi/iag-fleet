@@ -21,6 +21,7 @@ var crudEntities = []string{
 var workflowPermissions = []PermissionDescriptor{
 	{Name: "fleet.approve_mileage_jmp", Description: "Approve JMP mileage claims"},
 	{Name: "fleet.complete_toolbox_jmp", Description: "Complete toolbox talk on JMP"},
+	{Name: "fleet.complete_jmp", Description: "Mark an active JMP as completed"},
 	{Name: "fleet.cancel_jmp", Description: "Cancel a JMP"},
 	{Name: "fleet.advance_stage_cargo", Description: "Advance cargo workflow stage"},
 	{Name: "fleet.offload_cargo", Description: "Offload cargo"},

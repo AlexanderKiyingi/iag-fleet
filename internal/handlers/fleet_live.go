@@ -90,8 +90,8 @@ func (h *FleetLive) stream(c *gin.Context) {
 		defer liveCancel()
 	}
 
-	// Fallback poll when Redis is not configured or between sparse events.
-	tick := time.NewTicker(15 * time.Second)
+	// Fallback poll between sparse events or when ingest runs in another process without Redis.
+	tick := time.NewTicker(3 * time.Second)
 	defer tick.Stop()
 
 	for {
