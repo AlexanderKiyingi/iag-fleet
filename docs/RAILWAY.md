@@ -14,9 +14,9 @@ If the service is wired to `IAG_multi_backend` instead, set **Root directory** t
 
 ### `github.com/iag/fleet-iot` dependency
 
-The standalone Dockerfile **clones** [Fleet_IoT](https://github.com/AlexanderKiyingi/Fleet_IoT) at build time (`FLEET_IOT_REF`, default `main`). No monorepo `edge/` path is required on Railway.
+The standalone Dockerfile **clones** [iag-telemetry-gateway](https://github.com/AlexanderKiyingi/iag-telemetry-gateway) at build time. No monorepo `edge/` path is required on Railway.
 
-Optional build arg: `FLEET_IOT_REF` (git branch/tag) to pin the ingest module version.
+`FLEET_IOT_REF` defaults to a **commit SHA** in `Dockerfile` (not floating `main`) so Docker layer cache cannot pin an older API. Bump `FLEET_IOT_REF` in the Dockerfile when fleet depends on new `fleet-iot` symbols, or pass the build arg on Railway to override.
 
 ## Postgres (fix “connection refused” on 127.0.0.1:5432)
 

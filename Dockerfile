@@ -13,9 +13,14 @@ ENV FLEET_IOT_DEP=/deps/fleet-iot \
     PLATFORM_GO_DEP=/deps/platform-go
 
 FROM base AS fleet-iot-clone
-ARG FLEET_IOT_REF=main
+# Pin a commit SHA (not just "main") so standalone builds do not reuse a stale
+# Docker layer from before iag-telemetry-gateway API changes. Bump when fleet
+# depends on new fleet-iot symbols (e.g. PublishStatusChanges).
+ARG FLEET_IOT_REF=8dce711
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
-RUN git clone --depth 1 --branch "${FLEET_IOT_REF}" "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}"
+RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
+    && cd "${FLEET_IOT_DEP}" \
+    && git checkout "${FLEET_IOT_REF}"
 
 FROM base AS fleet-iot-copy
 COPY edge/Fleet_IoT ${FLEET_IOT_DEP}
