@@ -54,6 +54,14 @@ type Vehicle struct {
 	Year               int      `json:"year"                     db:"year"`
 	VehicleClass       string   `json:"vehicleClass"             db:"vehicle_class"`
 	Ownership          string   `json:"ownership"                db:"ownership"`
+	Vin                string   `json:"vin,omitempty"            db:"vin"`
+	Color              string   `json:"color,omitempty"          db:"color"`
+	SeatCapacity       *int     `json:"seatCapacity,omitempty"   db:"seat_capacity"`
+	Transmission       string   `json:"transmission,omitempty"   db:"transmission"`
+	EngineCapacity     string   `json:"engineCapacity,omitempty" db:"engine_capacity"`
+	DriveHand          string   `json:"driveHand,omitempty"      db:"drive_hand"`
+	PurchaseDate       string   `json:"purchaseDate,omitempty"   db:"purchase_date" dbcast:"date"`
+	Mileage            *float64 `json:"mileage,omitempty"        db:"mileage"`
 	DriverID           string   `json:"driverId,omitempty"       db:"driver_id"`
 	Status             string   `json:"status"                   db:"status"`
 	Location           string   `json:"location"                 db:"location"`
