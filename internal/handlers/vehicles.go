@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/events"
@@ -49,13 +48,7 @@ func validateVehicleDriver(ctx context.Context, repo *store.Repository, v *model
 	if v == nil || v.DriverID == "" {
 		return nil
 	}
-	if _, err := repo.Drivers.Get(ctx, v.DriverID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return errDriverNotFound
-		}
-		return err
-	}
-	return nil
+	return validateDriverDispatch(ctx, repo, v.DriverID)
 }
 
 func emitVehicleEvent(ctx context.Context, bus *events.Bus, eventType string, v models.Vehicle, previousStatus string) {

@@ -16,6 +16,7 @@ var crudEntities = []string{
 	"maintenance_item", "part", "tyre", "trip",
 	"safety_event", "compliance_item", "service_request",
 	"task_item", "deployment_day", "fuel_record",
+	"inspection_template", "vehicle_inspection",
 }
 
 var workflowPermissions = []PermissionDescriptor{
@@ -39,7 +40,6 @@ var workflowPermissions = []PermissionDescriptor{
 	{Name: "fleet.add_pm_schedule", Description: "Create PM schedules"},
 	{Name: "fleet.change_pm_schedule", Description: "Update PM schedules"},
 	{Name: "fleet.delete_pm_schedule", Description: "Delete PM schedules"},
-	{Name: "fleet.change_vehicle_inspection", Description: "Submit vehicle inspections"},
 	{Name: "fleet.view_operator_ticker", Description: "View operator ticker"},
 	{Name: "fleet.change_operator_ticker", Description: "Update operator ticker"},
 	{Name: "fleet.view_audit_entry", Description: "View fleet audit log"},

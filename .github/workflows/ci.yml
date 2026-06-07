@@ -56,3 +56,8 @@ jobs:
         run: go test ./...
         env:
           DATABASE_URL: postgres://iag:iag_dev@localhost:5432/iag_platform?sslmode=disable&search_path=iag_fleet
+
+      - name: Integration tests
+        run: go test ./internal/handlers/... -run Integration -v -count=1
+        env:
+          TEST_DATABASE_URL: postgres://iag:iag_dev@localhost:5432/iag_platform?sslmode=disable&search_path=iag_fleet

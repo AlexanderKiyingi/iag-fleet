@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/iag/fleet-tool/backend/internal/store"
 )
 
 // FuelLinkMatchWindow is how close in time a manual fuel record and telemetry
@@ -17,58 +18,73 @@ const FuelLinkMatchWindow = 48 * time.Hour
 const FuelLinkLitresTolerance = 0.20
 
 // LinkFuelEvents matches unlinked refuel telemetry events to manual fuel_records
-// for the same vehicle when volume and date align.
-func LinkFuelEvents(ctx context.Context, pool *pgxpool.Pool, lookbackDays int) (linked int, err error) {
+// for the same vehicle when volume and date align. fuel_events live on the
+// telemetry pool when split; fuel_records and vehicles stay operational.
+func LinkFuelEvents(ctx context.Context, db store.FuelDB, lookbackDays int, vehicleID string) (linked int, err error) {
 	if lookbackDays <= 0 {
 		lookbackDays = 90
 	}
 	since := time.Now().UTC().AddDate(0, 0, -lookbackDays)
+	op := db.Operational
+	evPool := db.Events()
 
 	const eventsQ = `
-        SELECT e.id, e.vehicle_id, e.ts, e.delta_litres, e.delta_pct, e.odo,
-               v.tank_capacity_litres
-        FROM fuel_events e
-        JOIN vehicles v ON v.id = e.vehicle_id
-        WHERE e.kind = 'refuel'
-          AND e.fuel_record_id IS NULL
-          AND e.ts >= $1
-        ORDER BY e.ts ASC`
+        SELECT id, vehicle_id, ts, delta_litres, delta_pct, odo
+        FROM fuel_events
+        WHERE kind = 'refuel'
+          AND fuel_record_id IS NULL
+          AND ts >= $1
+          AND ($2 = '' OR vehicle_id = $2)
+        ORDER BY ts ASC`
 
-	rows, err := pool.Query(ctx, eventsQ, since)
+	rows, err := evPool.Query(ctx, eventsQ, since, vehicleID)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
 
 	type candidate struct {
-		id       int64
-		vehicle  string
-		ts       time.Time
-		litres   float64
+		id        int64
+		vehicle   string
+		ts        time.Time
+		deltaPct  float64
+		litres    float64
 		hasLitres bool
-		odo      *float64
+		odo       *float64
 	}
 
 	var events []candidate
+	vehIDs := make(map[string]struct{})
 	for rows.Next() {
 		var c candidate
 		var deltaLitres *float64
-		var deltaPct float64
-		var tankCap *int
-		if err := rows.Scan(&c.id, &c.vehicle, &c.ts, &deltaLitres, &deltaPct, &c.odo, &tankCap); err != nil {
+		if err := rows.Scan(&c.id, &c.vehicle, &c.ts, &deltaLitres, &c.deltaPct, &c.odo); err != nil {
 			return linked, err
 		}
+		vehIDs[c.vehicle] = struct{}{}
 		if deltaLitres != nil && *deltaLitres > 0 {
 			c.litres = *deltaLitres
-			c.hasLitres = true
-		} else if tankCap != nil && *tankCap > 0 && deltaPct > 0 {
-			c.litres = float64(*tankCap) * deltaPct / 100.0
 			c.hasLitres = true
 		}
 		events = append(events, c)
 	}
 	if err := rows.Err(); err != nil {
 		return linked, err
+	}
+
+	tankByVeh, err := loadTankCapacities(ctx, op, vehIDs)
+	if err != nil {
+		return linked, err
+	}
+	for i := range events {
+		c := &events[i]
+		if c.hasLitres {
+			continue
+		}
+		if cap := tankByVeh[c.vehicle]; cap > 0 && c.deltaPct > 0 {
+			c.litres = float64(cap) * c.deltaPct / 100.0
+			c.hasLitres = true
+		}
 	}
 
 	const recordsQ = `
@@ -79,13 +95,11 @@ func LinkFuelEvents(ctx context.Context, pool *pgxpool.Pool, lookbackDays int) (
           AND date >= ($2::date - 3)
           AND date <= ($2::date + 3)`
 
-	const linkQ = `
-        UPDATE fuel_events SET fuel_record_id = $2 WHERE id = $1 AND fuel_record_id IS NULL`
-	const linkRecQ = `
-        UPDATE fuel_records SET fuel_event_id = $2 WHERE id = $1 AND fuel_event_id IS NULL`
+	const linkEventQ = `UPDATE fuel_events SET fuel_record_id = $2 WHERE id = $1 AND fuel_record_id IS NULL`
+	const linkRecQ = `UPDATE fuel_records SET fuel_event_id = $2 WHERE id = $1 AND fuel_event_id IS NULL`
 
 	for _, ev := range events {
-		recRows, err := pool.Query(ctx, recordsQ, ev.vehicle, ev.ts)
+		recRows, err := op.Query(ctx, recordsQ, ev.vehicle, ev.ts)
 		if err != nil {
 			return linked, err
 		}
@@ -130,29 +144,46 @@ func LinkFuelEvents(ctx context.Context, pool *pgxpool.Pool, lookbackDays int) (
 		if bestID == "" {
 			continue
 		}
-		tx, err := pool.Begin(ctx)
+		tag, err := evPool.Exec(ctx, linkEventQ, ev.id, bestID)
 		if err != nil {
-			return linked, err
-		}
-		tag, err := tx.Exec(ctx, linkQ, ev.id, bestID)
-		if err != nil {
-			_ = tx.Rollback(ctx)
 			return linked, err
 		}
 		if tag.RowsAffected() == 0 {
-			_ = tx.Rollback(ctx)
 			continue
 		}
-		if _, err := tx.Exec(ctx, linkRecQ, bestID, ev.id); err != nil {
-			_ = tx.Rollback(ctx)
-			return linked, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return linked, err
+		if _, err := op.Exec(ctx, linkRecQ, bestID, ev.id); err != nil {
+			return linked, fmt.Errorf("link fuel_record %s to event %d: %w", bestID, ev.id, err)
 		}
 		linked++
 	}
 	return linked, nil
+}
+
+func loadTankCapacities(ctx context.Context, pool *pgxpool.Pool, vehIDs map[string]struct{}) (map[string]int, error) {
+	out := make(map[string]int, len(vehIDs))
+	if len(vehIDs) == 0 {
+		return out, nil
+	}
+	ids := make([]string, 0, len(vehIDs))
+	for id := range vehIDs {
+		ids = append(ids, id)
+	}
+	rows, err := pool.Query(ctx, `SELECT id, tank_capacity_litres FROM vehicles WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var cap *int
+		if err := rows.Scan(&id, &cap); err != nil {
+			return nil, err
+		}
+		if cap != nil && *cap > 0 {
+			out[id] = *cap
+		}
+	}
+	return out, rows.Err()
 }
 
 // LinkFuelEventsSummary returns human-readable stats for logging.

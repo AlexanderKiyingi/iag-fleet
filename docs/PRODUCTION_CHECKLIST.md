@@ -24,6 +24,9 @@ Use this before enabling Fleet in staging/production.
 | `ALLOWED_ORIGINS` | Explicit CORS list (not `*`) |
 | `TELEMETRY_INGEST_URL` | Gateway upstream to Fleet_IoT HTTP ingest |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Trace export to collector |
+| `NOTIFICATIONS_SCAN_SEC` | In-app bell scan interval (default 60s); also recomputes compliance status |
+| PM cron | `fleet-jobs --evaluate-pm --mark-mx-overdue` daily (or `POST /api/pm-schedules/evaluate` with service token) |
+| Compliance cron | `fleet-jobs --recompute-compliance` daily (redundant with notification scan but useful for batch audit) |
 
 ## Kubernetes
 
@@ -56,4 +59,9 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 - **Vehicle created/updated/deleted** → outbox → `fleet.vehicle.*`
 - **Status change** (registry patch or telemetry sync) → `fleet.vehicle.status_changed`
+- **PM due** (notification scan) → `fleet.pm.due`
+- **Maintenance created** (PM evaluate) → `fleet.maintenance.created`
+- **Maintenance completed** → `fleet.maintenance.completed`
+- **Compliance expiring** (notification scan) → `fleet.compliance.expiring`
+- **Compliance renewed** → `fleet.compliance.renewed`
 - **Fuel / JMP / cargo** → existing workflow events (best-effort or outbox where wired)

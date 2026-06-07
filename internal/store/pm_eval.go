@@ -161,6 +161,36 @@ func (r *Repository) EvaluatePMSchedules(ctx context.Context, withinDays int, wi
 	return res, nil
 }
 
+// RollPMScheduleFromWorkOrder advances last_service on the linked PM schedule and
+// syncs vehicles.next_service_km for v7 dashboard parity.
+func (r *Repository) RollPMScheduleFromWorkOrder(ctx context.Context, mx models.MaintenanceItem) error {
+	if mx.PmScheduleID == "" {
+		return nil
+	}
+	sched, err := r.PMSchedules.Get(ctx, mx.PmScheduleID)
+	if err != nil {
+		return err
+	}
+	odo := mx.Odo
+	date := mx.Date
+	if date == "" {
+		date = time.Now().UTC().Format("2006-01-02")
+	}
+	sched.LastServiceOdo = &odo
+	sched.LastServiceDate = date
+	RecomputePMNextDue(&sched)
+	if _, err := r.PMSchedules.Replace(ctx, sched.ID, sched); err != nil {
+		return err
+	}
+	if sched.VehicleID != "" && sched.NextDueKm != nil {
+		nextKm := *sched.NextDueKm
+		_, _ = r.Vehicles.Update(ctx, sched.VehicleID, func(v *models.Vehicle) {
+			v.NextServiceKm = nextKm
+		})
+	}
+	return nil
+}
+
 func (r *Repository) hasOpenPMWorkOrder(ctx context.Context, scheduleID, vehicleID string) (bool, error) {
 	const q = `
         SELECT 1 FROM maintenance_items

@@ -220,6 +220,7 @@ type FuelRecord struct {
 	Anomaly        *bool          `json:"anomaly,omitempty"        db:"anomaly"`
 	AnomalyReason  string         `json:"anomalyReason,omitempty"  db:"anomaly_reason"`
 	AnomalyType    string         `json:"anomalyType,omitempty"    db:"anomaly_type"`
+	AnomalyTypes   AnomalyTypes   `json:"anomalyTypes"               db:"anomaly_types"`
 	AnomalyStatus  string         `json:"anomalyStatus,omitempty"  db:"anomaly_status"`
 	AnomalyHistory AnomalyHistory `json:"anomalyHistory"           db:"anomaly_history"`
 	FuelEventID    *int64         `json:"fuelEventId,omitempty"    db:"fuel_event_id"`

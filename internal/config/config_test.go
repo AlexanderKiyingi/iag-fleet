@@ -32,6 +32,15 @@ func TestTelemetrySplit(t *testing.T) {
 	}
 }
 
+func TestStrictRBAC(t *testing.T) {
+	if !(Config{Environment: "production"}).StrictRBAC() {
+		t.Fatal("production should enable strict RBAC")
+	}
+	if (Config{Environment: "development"}).StrictRBAC() {
+		t.Fatal("development should not enable strict RBAC")
+	}
+}
+
 func TestLoad_requiresDatabaseURL(t *testing.T) {
 	os.Unsetenv("DATABASE_URL")
 	_, err := Load()

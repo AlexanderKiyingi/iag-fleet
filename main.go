@@ -76,6 +76,7 @@ func main() {
 	}
 
 	repo := store.NewRepository(operationalPool)
+	repo.AttachTelemetry(telemetryPool)
 	iotStore := iot.NewSplitStore(operationalPool, telemetryPool)
 	verifier := authclient.NewVerifier(authclient.Options{
 		JWKSURL:  cfg.JWKSURL,

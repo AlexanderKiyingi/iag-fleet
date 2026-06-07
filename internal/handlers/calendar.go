@@ -21,7 +21,7 @@ func (cal *Calendar) Register(rg *gin.RouterGroup) {
 }
 
 type calendarEvent struct {
-	Kind      string `json:"kind"` // jmp | svc | cmp | req | cargo | fuel
+	Kind      string `json:"kind"` // jmp | svc | cmp | pm | req | cargo | fuel
 	Start     string `json:"start"`
 	End       string `json:"end"`
 	Title     string `json:"title"`
@@ -60,6 +60,7 @@ func (cal *Calendar) events(c *gin.Context) {
 	includeReq := want("req")
 	includeCargo := want("cargo")
 	includeFuel := want("fuel")
+	includePM := want("pm")
 
 	ctx := c.Request.Context()
 	vehicles, _ := cal.Repo.Vehicles.List(ctx)
@@ -120,10 +121,27 @@ func (cal *Calendar) events(c *gin.Context) {
 			})
 		}
 	}
+	if includePM {
+		schedules, _ := cal.Repo.PMSchedules.List(ctx)
+		for _, s := range schedules {
+			if !s.Active || s.NextDueDate == "" {
+				continue
+			}
+			d := parseDay(s.NextDueDate)
+			if d.IsZero() || d.Before(start) || d.After(end) {
+				continue
+			}
+			out = append(out, calendarEvent{
+				Kind: "pm", Start: d.Format("2006-01-02"), End: d.Format("2006-01-02"),
+				Title: s.Name + " · " + s.ServiceType, Subtitle: vehPlate[s.VehicleID],
+				RefID: s.ID, Row: vehPlate[s.VehicleID], SingleDay: true,
+			})
+		}
+	}
 	if includeCmp {
 		cmp, _ := cal.Repo.Compliance.List(ctx)
 		for _, ci := range cmp {
-			if ci.Expiry == "" {
+			if ci.Expiry == "" || ci.Status == "valid" {
 				continue
 			}
 			d := parseDay(ci.Expiry)

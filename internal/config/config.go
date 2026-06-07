@@ -96,6 +96,13 @@ func (c Config) IsProduction() bool {
 	return c.Environment == "production" || c.Environment == "prod"
 }
 
+// StrictRBAC denies access when JWT permissions are empty (fail-closed).
+// Production always enforces strict RBAC; dev allows empty permissions for
+// easier local iteration.
+func (c Config) StrictRBAC() bool {
+	return c.IsProduction()
+}
+
 func (c Config) HasWildcardCORS() bool {
 	for _, o := range strings.Split(c.CORSOrigin, ",") {
 		if strings.TrimSpace(o) == "*" {

@@ -1,0 +1,32 @@
+package handlers
+
+import (
+	"context"
+
+	"github.com/gin-gonic/gin"
+	"github.com/iag/fleet-tool/backend/internal/models"
+	"github.com/iag/fleet-tool/backend/internal/store"
+)
+
+// NewDriverResource returns driver CRUD with validation and compliance sync.
+func NewDriverResource(repo *store.Repository) *Resource[models.Driver, *models.Driver] {
+	r := &Resource[models.Driver, *models.Driver]{
+		Repo:       repo,
+		Collection: repo.Drivers,
+		Entity:     "driver",
+		IDPrefix:   "DRV",
+	}
+	r.BeforeCreate = func(c *gin.Context, item *models.Driver) error {
+		return validateDriver(item)
+	}
+	r.BeforeUpdate = func(c *gin.Context, item *models.Driver) error {
+		return validateDriver(item)
+	}
+	r.AfterCreate = func(ctx context.Context, item models.Driver) {
+		_ = repo.SyncDriverComplianceDocs(ctx, item)
+	}
+	r.AfterUpdate = func(ctx context.Context, _, after models.Driver) {
+		_ = repo.SyncDriverComplianceDocs(ctx, after)
+	}
+	return r
+}

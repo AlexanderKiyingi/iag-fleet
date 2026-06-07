@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/cache"
+	"github.com/iag/fleet-tool/backend/internal/jobs"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -42,6 +43,8 @@ type dashboardKpis struct {
 	FuelMtdUgx    float64 `json:"fuelMtdUgx"`
 	FuelAnomalies int     `json:"fuelAnomalies"`
 	ComplianceAtRisk int  `json:"complianceAtRisk"`
+	PmDue            int  `json:"pmDue"`
+	MaintenanceOverdue int `json:"maintenanceOverdue"`
 }
 
 type dashboardAlert struct {
@@ -74,6 +77,8 @@ func (d *Dashboard) summary(c *gin.Context) {
 			return
 		}
 	}
+
+	_, _ = d.Repo.RecomputeComplianceStatuses(ctx)
 
 	vehicles, err := d.Repo.Vehicles.List(ctx)
 	if err != nil {
@@ -172,6 +177,17 @@ func (d *Dashboard) summary(c *gin.Context) {
 		}
 	}
 
+	pmDue, _ := d.Repo.ListDuePMSchedules(ctx, jobs.DefaultPMWithinDays, jobs.DefaultPMWithinKm)
+	kpi.PmDue = len(pmDue)
+
+	maintenance, _ := d.Repo.Maintenance.List(ctx)
+	today := time.Now().UTC().Format("2006-01-02")
+	for _, mx := range maintenance {
+		if (mx.Status == "scheduled" || mx.Status == "overdue") && mx.Date != "" && mx.Date < today {
+			kpi.MaintenanceOverdue++
+		}
+	}
+
 	pipeline := make([]cargoPipelineNode, 0, len(models.CargoStages))
 	stageCount := make(map[string]int, len(models.CargoStages))
 	for _, s := range models.CargoStages {
@@ -209,6 +225,39 @@ func (d *Dashboard) summary(c *gin.Context) {
 				Href:     "/compliance",
 			})
 		}
+	}
+	for _, row := range pmDue {
+		sev := "warn"
+		if row.DueInKm != nil && *row.DueInKm <= 0 {
+			sev = "crit"
+		}
+		detail := row.Schedule.Name
+		if row.Vehicle != nil {
+			detail = row.Vehicle.Plate + " · " + detail
+		}
+		alerts = append(alerts, dashboardAlert{
+			Severity: sev,
+			Title:    "PM due · " + row.Schedule.ServiceType,
+			Detail:   detail,
+			When:     row.Schedule.NextDueDate,
+			Href:     "/maintenance",
+		})
+	}
+	for _, mx := range maintenance {
+		if (mx.Status != "scheduled" && mx.Status != "overdue") || mx.Date == "" || mx.Date >= today {
+			continue
+		}
+		detail := mx.Service
+		if v, ok := vehByID[mx.VehicleID]; ok {
+			detail = v.Plate + " · " + detail
+		}
+		alerts = append(alerts, dashboardAlert{
+			Severity: "crit",
+			Title:    "WO overdue · " + mx.Type,
+			Detail:   detail,
+			When:     mx.Date,
+			Href:     "/maintenance",
+		})
 	}
 	for _, s := range safety {
 		if s.Severity == "crit" && (s.Status == "open" || s.Status == "investigating") {

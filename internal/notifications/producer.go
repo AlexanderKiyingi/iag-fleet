@@ -25,6 +25,8 @@ const (
 	KindRequestSubmitted   = "request_submitted"
 	KindRequestReviewed    = "request_reviewed"
 	KindCargoAtAcp         = "cargo_at_acp"
+	KindMaintenanceDue     = "maintenance_due"
+	KindMaintenanceOverdue = "maintenance_overdue"
 )
 
 // Producer scans the same conditions the bell used to recompute on
@@ -70,6 +72,10 @@ func (p *Producer) Run(ctx context.Context, interval time.Duration) {
 // Scan runs one full pass. Returns the number of notifications actually
 // inserted across all users.
 func (p *Producer) Scan(ctx context.Context) error {
+	if _, err := p.Repo.RecomputeComplianceStatuses(ctx); err != nil {
+		slog.Warn("notifications: compliance status recompute failed", "err", err)
+	}
+
 	users, err := p.Repo.Notifications.ActiveRecipientIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("active recipients: %w", err)
@@ -150,10 +156,22 @@ type signal struct {
 func (p *Producer) collectSignals(ctx context.Context) ([]signal, error) {
 	var out []signal
 
+	drivers, _ := p.Repo.Drivers.List(ctx)
+	vehicles, _ := p.Repo.Vehicles.List(ctx)
+	drvName := make(map[string]string, len(drivers))
+	for _, d := range drivers {
+		drvName[d.ID] = d.Name
+	}
+	vehPlate := make(map[string]string, len(vehicles))
+	for _, v := range vehicles {
+		vehPlate[v.ID] = v.Plate
+	}
+
 	// ── Compliance: expired / missing → crit; expiring → warn.
 	compliance, err := p.Repo.Compliance.List(ctx)
 	if err == nil {
 		for _, c := range compliance {
+			subject := complianceSubjectNamed(c, drvName, vehPlate)
 			switch c.Status {
 			case "expired":
 				out = append(out, signal{
@@ -162,7 +180,7 @@ func (p *Producer) collectSignals(ctx context.Context) ([]signal, error) {
 					RefID:    c.ID,
 					Severity: "crit",
 					Title:    fmt.Sprintf("%s expired", c.DocType),
-					Body:     complianceSubject(c),
+					Body:     subject,
 					Href:     "/compliance",
 				})
 			case "missing":
@@ -172,7 +190,7 @@ func (p *Producer) collectSignals(ctx context.Context) ([]signal, error) {
 					RefID:    c.ID,
 					Severity: "crit",
 					Title:    fmt.Sprintf("%s missing", c.DocType),
-					Body:     complianceSubject(c),
+					Body:     subject,
 					Href:     "/compliance",
 				})
 			case "expiring":
@@ -182,10 +200,75 @@ func (p *Producer) collectSignals(ctx context.Context) ([]signal, error) {
 					RefID:    c.ID,
 					Severity: "warn",
 					Title:    fmt.Sprintf("%s expiring", c.DocType),
-					Body:     complianceSubject(c) + " · " + c.Expiry,
+					Body:     subject + " · " + c.Expiry,
 					Href:     "/compliance",
 				})
 			}
+		}
+	}
+
+	// ── PM schedules due (km or date within default thresholds).
+	duePM, err := p.Repo.ListDuePMSchedules(ctx, store.ComplianceExpiringWithinDays, 500)
+	if err == nil {
+		for _, row := range duePM {
+			plate := ""
+			if row.Vehicle != nil {
+				plate = row.Vehicle.Plate
+			}
+			title := row.Schedule.Name
+			if plate != "" {
+				title = plate + " · " + title
+			}
+			body := row.Schedule.ServiceType
+			if row.DueInKm != nil {
+				body = fmt.Sprintf("%s · %d km remaining", body, int(*row.DueInKm))
+			}
+			sev := "warn"
+			if row.Reason == "both" || (row.DueInKm != nil && *row.DueInKm <= 0) {
+				sev = "crit"
+			}
+			out = append(out, signal{
+				Kind:     KindMaintenanceDue,
+				RefType:  "pm_schedule",
+				RefID:    row.Schedule.ID,
+				Severity: sev,
+				Title:    "PM due · " + title,
+				Body:     body,
+				Href:     "/maintenance",
+			})
+		}
+	}
+
+	// ── Maintenance work orders past scheduled date.
+	mxItems, err := p.Repo.Maintenance.List(ctx)
+	if err == nil {
+		today := p.now().UTC().Format("2006-01-02")
+		for _, mx := range mxItems {
+			if mx.Status != "scheduled" && mx.Status != "overdue" {
+				continue
+			}
+			if mx.Date == "" || mx.Date >= today {
+				continue
+			}
+			plate := vehPlate[mx.VehicleID]
+			title := mx.Type
+			if plate != "" {
+				title = plate + " · " + title
+			}
+			kind := KindMaintenanceOverdue
+			sev := "crit"
+			if mx.Status == "scheduled" {
+				sev = "warn"
+			}
+			out = append(out, signal{
+				Kind:     kind,
+				RefType:  "maintenance",
+				RefID:    mx.ID,
+				Severity: sev,
+				Title:    "WO overdue · " + title,
+				Body:     mx.Service,
+				Href:     "/maintenance",
+			})
 		}
 	}
 
@@ -314,14 +397,24 @@ func (p *Producer) collectSignals(ctx context.Context) ([]signal, error) {
 	return out, nil
 }
 
-// complianceSubject is the entity behind a compliance row, used as the
-// notification body. We don't have the joined name here without a
-// second query; the bell deep-links to /compliance which displays it.
-func complianceSubject(c models.ComplianceItem) string {
+func (p *Producer) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now().UTC()
+}
+
+func complianceSubjectNamed(c models.ComplianceItem, drivers, vehicles map[string]string) string {
 	if c.DriverID != "" {
+		if name := drivers[c.DriverID]; name != "" {
+			return name
+		}
 		return "Driver " + c.DriverID
 	}
 	if c.VehicleID != "" {
+		if plate := vehicles[c.VehicleID]; plate != "" {
+			return plate
+		}
 		return "Vehicle " + c.VehicleID
 	}
 	return c.DocNumber
@@ -341,6 +434,18 @@ func (p *Producer) maybePublishSignal(ctx context.Context, userID string, sig si
 		return
 	}
 	eventType := "fleet.notification." + sig.Kind
+	if sig.Kind == KindMaintenanceDue {
+		p.Events.PublishFleet(ctx, events.TypePMDue, events.FleetEventData(map[string]string{
+			"pmScheduleId": sig.RefID,
+			"refType":      sig.RefType,
+		}), sig.RefID, sig.RefID)
+	}
+	if sig.Kind == KindComplianceExpiring {
+		p.Events.PublishFleet(ctx, events.TypeComplianceExpiring, events.FleetEventData(map[string]string{
+			"complianceId": sig.RefID,
+			"refType":      sig.RefType,
+		}), sig.RefID, sig.RefID)
+	}
 	p.Events.PublishFleet(ctx, eventType, events.FleetEventData(map[string]string{
 		"kind":    sig.Kind,
 		"refType": sig.RefType,

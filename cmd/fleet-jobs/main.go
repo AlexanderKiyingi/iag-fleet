@@ -31,6 +31,11 @@ func main() {
 	doLink := flag.Bool("link-fuel", false, "match telemetry refuel events to fuel_records")
 	doStale := flag.Bool("mark-stale", false, "set moving/idle vehicles offline when telemetry is stale")
 	doDetectTrips := flag.Bool("detect-trips", false, "create auto_generated trips from telemetry in range")
+	doEvaluatePM := flag.Bool("evaluate-pm", false, "create work orders for due PM schedules")
+	doMarkMxOverdue := flag.Bool("mark-mx-overdue", false, "mark scheduled work orders past date as overdue")
+	doRecomputeCompliance := flag.Bool("recompute-compliance", false, "derive compliance status from expiry dates")
+	pmWithinDays := flag.Int("pm-within-days", jobs.DefaultPMWithinDays, "PM evaluate/due lookahead days")
+	pmWithinKm := flag.Float64("pm-within-km", jobs.DefaultPMWithinKm, "PM evaluate/due odometer lookahead km")
 	linkDays := flag.Int("link-days", 90, "lookback days for --link-fuel")
 	purgeDays := flag.Int("purge-days", 365, "retention window for --purge / --all (days)")
 	fromFlag := flag.String("from", "", "aggregate: first day YYYY-MM-DD UTC (default yesterday)")
@@ -47,8 +52,12 @@ func main() {
 	runLink := *doLink
 	runStale := *doAll || *doStale
 	runDetect := *doAll || *doDetectTrips
-	if !runAgg && !runPurge && !runLink && !runStale && !runDetect {
-		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, --purge, --mark-stale, --detect-trips, and/or --link-fuel")
+	runEvaluatePM := *doEvaluatePM
+	runMarkMxOverdue := *doMarkMxOverdue
+	runRecomputeCompliance := *doRecomputeCompliance
+	if !runAgg && !runPurge && !runLink && !runStale && !runDetect &&
+		!runEvaluatePM && !runMarkMxOverdue && !runRecomputeCompliance {
+		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, --purge, --mark-stale, --detect-trips, --evaluate-pm, --mark-mx-overdue, --recompute-compliance, and/or --link-fuel")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -85,7 +94,7 @@ func main() {
 			log.Fatalf("aggregate range: %v", err)
 		}
 		log.Printf("fleet-jobs: aggregating %s .. %s", from.Format(jobs.DayLayout), to.Add(-time.Nanosecond).Format(jobs.DayLayout))
-		written, ev, failed, err := jobs.AggregateTelemetry(ctxAgg, iotStore, eventBus, operationalPool, from, to, *vehicleFlag)
+		written, ev, failed, err := jobs.AggregateTelemetry(ctxAgg, iotStore, eventBus, store.FuelDB{Operational: operationalPool, Telemetry: telemetryPool}, from, to, *vehicleFlag)
 		if err != nil {
 			log.Fatalf("aggregate: %v", err)
 		}
@@ -98,21 +107,21 @@ func main() {
 			}
 		}
 		if *doAll {
-			linked, err := jobs.LinkFuelEvents(ctxAgg, operationalPool, *linkDays)
+			result, err := jobs.ReconcileFuel(ctxAgg, store.FuelDB{Operational: operationalPool, Telemetry: telemetryPool}, *linkDays, "")
 			if err != nil {
-				log.Printf("fleet-jobs link-fuel: %v", err)
+				log.Printf("fleet-jobs reconcile-fuel: %v", err)
 			} else {
-				log.Print(jobs.LinkFuelEventsSummary(linked, nil))
+				log.Print(jobs.ReconcileFuelSummary(result, nil))
 			}
 		}
 	}
 
 	if runLink {
-		linked, err := jobs.LinkFuelEvents(ctxAgg, operationalPool, *linkDays)
+		result, err := jobs.ReconcileFuel(ctxAgg, store.FuelDB{Operational: operationalPool, Telemetry: telemetryPool}, *linkDays, "")
 		if err != nil {
 			log.Fatalf("link-fuel: %v", err)
 		}
-		log.Print(jobs.LinkFuelEventsSummary(linked, nil))
+		log.Print(jobs.ReconcileFuelSummary(result, nil))
 	}
 
 	if runPurge {
@@ -147,5 +156,35 @@ func main() {
 		}
 		log.Printf("fleet-jobs detect-trips: created %d trips (%s .. %s)",
 			n, from.Format(jobs.DayLayout), to.Add(-time.Nanosecond).Format(jobs.DayLayout))
+	}
+
+	repo := store.NewRepository(operationalPool)
+	if runRecomputeCompliance {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		n, err := jobs.RecomputeComplianceStatuses(ctx, repo)
+		cancel()
+		if err != nil {
+			log.Fatalf("recompute-compliance: %v", err)
+		}
+		log.Printf("fleet-jobs recompute-compliance: %d rows updated", n)
+	}
+	if runMarkMxOverdue {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		n, err := jobs.MarkOverdueMaintenance(ctx, repo)
+		cancel()
+		if err != nil {
+			log.Fatalf("mark-mx-overdue: %v", err)
+		}
+		log.Printf("fleet-jobs mark-mx-overdue: %d work orders marked overdue", n)
+	}
+	if runEvaluatePM {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		res, err := jobs.EvaluatePM(ctx, repo, *pmWithinDays, *pmWithinKm)
+		cancel()
+		if err != nil {
+			log.Fatalf("evaluate-pm: %v", err)
+		}
+		log.Printf("fleet-jobs evaluate-pm: checked %d, created %d WOs, skipped %d",
+			res.Checked, res.Created, res.Skipped)
 	}
 }

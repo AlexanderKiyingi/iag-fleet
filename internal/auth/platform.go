@@ -23,12 +23,19 @@ func HasPerm(c *gin.Context, codename string) bool {
 	if platformAdminMayView(claims, codename) {
 		return true
 	}
+	if claims.IsStaff {
+		return true
+	}
+	perms := platformPerms(c)
+	if len(perms) == 0 {
+		return !isStrictRBAC(c)
+	}
 	for _, want := range []string{codename, fleetAlias(codename), legacyAlias(codename)} {
 		if claims.HasPermission(want) {
 			return true
 		}
 	}
-	for _, p := range platformPerms(c) {
+	for _, p := range perms {
 		for _, want := range []string{codename, fleetAlias(codename), legacyAlias(codename)} {
 			if p == want {
 				return true

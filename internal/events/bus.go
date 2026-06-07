@@ -38,6 +38,10 @@ const (
 	TypeCargoStageAdvanced      = "fleet.cargo.stage_advanced"
 	TypeCargoOffloaded          = "fleet.cargo.offloaded"
 	TypeComplianceExpiring      = "fleet.compliance.expiring"
+	TypeComplianceRenewed       = "fleet.compliance.renewed"
+	TypeMaintenanceCreated      = "fleet.maintenance.created"
+	TypeMaintenanceCompleted    = "fleet.maintenance.completed"
+	TypePMDue                   = "fleet.pm.due"
 	TypeTelemetryRefuelDetected = "fleet.telemetry.refuel_detected"
 	TypeTelemetryFuelAnomaly    = "fleet.telemetry.fuel_anomaly"
 	TypeServiceRequestAssigned  = "fleet.service_request.assigned"
@@ -162,7 +166,11 @@ func (b *Bus) PublishFleet(ctx context.Context, eventType string, data map[strin
 		return
 	}
 	evt := PlatformEvent{
+		ID:            uuid.NewString(),
 		Type:          eventType,
+		Time:          time.Now().UTC().Format(time.RFC3339Nano),
+		Source:        Source,
+		SpecVersion:   SpecVersion,
 		Data:          data,
 		CorrelationID: correlationID,
 	}

@@ -17,8 +17,23 @@ import (
 // auxiliary state (audit log, ticker) that doesn't fit the generic
 // Collection pattern. It owns the pgx pool but does not close it; the
 // caller owns the pool lifecycle.
+// FuelDB routes fuel_events reads/writes to the telemetry pool when split.
+type FuelDB struct {
+	Operational *pgxpool.Pool
+	Telemetry   *pgxpool.Pool
+}
+
+// Events returns the pool that holds fuel_events (telemetry when split).
+func (db FuelDB) Events() *pgxpool.Pool {
+	if db.Telemetry != nil {
+		return db.Telemetry
+	}
+	return db.Operational
+}
+
 type Repository struct {
-	pool *pgxpool.Pool
+	pool          *pgxpool.Pool
+	telemetryPool *pgxpool.Pool
 
 	Vehicles    *Collection[models.Vehicle, *models.Vehicle]
 	Drivers     *Collection[models.Driver, *models.Driver]
@@ -306,6 +321,24 @@ func (r *Repository) PatchTicker(ctx context.Context, patch models.OperatorTicke
 // Pool returns the underlying pool for handlers that need to run their
 // own ad-hoc queries without going through a Collection.
 func (r *Repository) Pool() *pgxpool.Pool { return r.pool }
+
+// AttachTelemetry sets the Timescale read/write pool for fuel_events.
+func (r *Repository) AttachTelemetry(pool *pgxpool.Pool) {
+	r.telemetryPool = pool
+}
+
+// FuelEventsPool returns the pool backing fuel_events.
+func (r *Repository) FuelEventsPool() *pgxpool.Pool {
+	if r.telemetryPool != nil {
+		return r.telemetryPool
+	}
+	return r.pool
+}
+
+// FuelDB returns both pools for cross-database fuel linking.
+func (r *Repository) FuelDB() FuelDB {
+	return FuelDB{Operational: r.pool, Telemetry: r.telemetryPool}
+}
 
 // SilenceUnused keeps the time import live when audit-row iteration is
 // bypassed by a direct LIMIT clause.

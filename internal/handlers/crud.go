@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/store"
@@ -160,14 +159,26 @@ func (r *Resource[T, PT]) bulkCreate(c *gin.Context) {
 			PT(&items[i]).SetID(generateID(r.IDPrefix))
 		}
 	}
-	created, err := r.Collection.BulkAdd(c.Request.Context(), items)
+	ctx := c.Request.Context()
+	for i := range items {
+		if r.BeforeCreate != nil {
+			if err := r.BeforeCreate(c, &items[i]); err != nil {
+				respondMutationError(c, err)
+				return
+			}
+		}
+	}
+	created, err := r.Collection.BulkAdd(ctx, items)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	user := currentUser(c, r.Repo)
 	for i := range created {
-		r.Repo.LogBest(c.Request.Context(), "create", r.Entity, PT(&created[i]).GetID(), "bulk", user)
+		if r.AfterCreate != nil {
+			r.AfterCreate(ctx, created[i])
+		}
+		r.Repo.LogBest(ctx, "create", r.Entity, PT(&created[i]).GetID(), "bulk", user)
 	}
 	c.JSON(http.StatusCreated, gin.H{
 		"added": len(created),
@@ -284,6 +295,7 @@ func (r *Resource[T, PT]) bulkPatch(c *gin.Context) {
 	// items. We do the reads serially before the BulkReplace so a
 	// missing-id error rolls back nothing — the tx hasn't started yet.
 	merged := make([]T, 0, len(body.IDs))
+	before := make([]T, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		existing, err := r.Collection.Get(ctx, id)
 		if err != nil {
@@ -299,6 +311,13 @@ func (r *Resource[T, PT]) bulkPatch(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "id": id})
 			return
 		}
+		if r.BeforeUpdate != nil {
+			if err := r.BeforeUpdate(c, &m); err != nil {
+				respondMutationError(c, err)
+				return
+			}
+		}
+		before = append(before, existing)
 		merged = append(merged, m)
 	}
 
@@ -310,6 +329,9 @@ func (r *Resource[T, PT]) bulkPatch(c *gin.Context) {
 
 	user := currentUser(c, r.Repo)
 	for i := range updated {
+		if r.AfterUpdate != nil {
+			r.AfterUpdate(ctx, before[i], updated[i])
+		}
 		r.Repo.LogBest(ctx, "update", r.Entity, PT(&updated[i]).GetID(), "bulk", user)
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -489,16 +511,14 @@ func respondError(c *gin.Context, err error) {
 }
 
 func respondMutationError(c *gin.Context, err error) {
-	if errors.Is(err, errDriverNotFound) || errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, errDriverNotFound) || errors.Is(err, errDriverPermitInvalid) ||
+		errors.Is(err, store.ErrNotFound) ||
+		errors.Is(err, errInvalidPMSchedule) || errors.Is(err, errInvalidMaintenanceStatus) ||
+		errors.Is(err, errInvalidComplianceDoc) || errors.Is(err, errInvalidComplianceExpiry) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	respondError(c, err)
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func generateID(prefix string) string {

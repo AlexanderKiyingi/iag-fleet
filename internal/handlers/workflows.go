@@ -150,9 +150,17 @@ func (w *Workflows) completeJmp(c *gin.Context) {
 		return
 	}
 	user := currentUser(c, w.Repo)
-	w.Repo.LogBest(ctx, "complete", "jmp", id, "", user)
+	fuelRecon, _ := jmpplan.ReconcileFuelActuals(ctx, w.Repo, updated)
+	note := jmpplan.FuelReconciliationNote(fuelRecon)
+	w.Repo.LogBest(ctx, "complete", "jmp", id, note, user)
 	w.emitFleet(ctx, events.TypeJMPCompleted, map[string]string{"jmpId": id, "status": "completed"}, id)
-	c.JSON(http.StatusOK, updated)
+	c.JSON(http.StatusOK, struct {
+		models.JMP
+		FuelReconciliation jmpplan.FuelReconciliation `json:"fuelReconciliation"`
+	}{
+		JMP:                updated,
+		FuelReconciliation: fuelRecon,
+	})
 }
 
 type approveMileageRequest struct {
@@ -370,6 +378,10 @@ func (w *Workflows) assignRequest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "driver is external"})
 		return
 	}
+	if err := validateDriverDispatch(ctx, w.Repo, body.DriverID); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 
 	user := currentUser(c, w.Repo)
 	updated, err := w.Repo.Requests.Update(ctx, id, func(r *models.ServiceRequest) {
@@ -496,6 +508,10 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 			"error": "request already has a JMP",
 			"jmpId": req.JmpID,
 		})
+		return
+	}
+	if err := validateDriverDispatch(ctx, w.Repo, req.AssignedDriverID); err != nil {
+		respondMutationError(c, err)
 		return
 	}
 
@@ -919,6 +935,11 @@ func (w *Workflows) complianceRenew(c *gin.Context) {
 	user := currentUser(c, w.Repo)
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	if err := validateFutureExpiry(body.Expiry); err != nil {
+		respondMutationError(c, err)
+		return
+	}
+
 	updated, err := w.Repo.Compliance.Update(ctx, id, func(ci *models.ComplianceItem) {
 		// Prior period → history (only if it carried any signal).
 		if ci.DocNumber != "" || ci.Issuer != "" || ci.Issued != "" || ci.Expiry != "" {
@@ -948,6 +969,11 @@ func (w *Workflows) complianceRenew(c *gin.Context) {
 		return
 	}
 	w.Repo.LogBest(ctx, "renew", "compliance_item", id, body.DocNumber, user)
+	w.emitFleet(ctx, events.TypeComplianceRenewed, map[string]string{
+		"complianceId": id,
+		"docType":      updated.DocType,
+		"expiry":       updated.Expiry,
+	}, id)
 	c.JSON(http.StatusOK, updated)
 }
 
@@ -964,6 +990,10 @@ func (w *Workflows) maintenanceAdvanceStatus(c *gin.Context) {
 	}
 	id := c.Param("id")
 	ctx := c.Request.Context()
+	if err := validateMaintenanceStatus(body.Status); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	user := currentUser(c, w.Repo)
 	updated, err := w.Repo.Maintenance.Update(ctx, id, func(m *models.MaintenanceItem) {
 		if m.Status != body.Status {
@@ -1038,12 +1068,14 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 
 	// Read the WO and its breakdown under FOR UPDATE so we don't race
 	// with a concurrent /maintenance/:id PATCH editing the breakdown.
-	var status string
+	var status, pmScheduleID, vehicleID, woDate string
+	var odo float64
 	var breakdownRaw []byte
 	if err := tx.QueryRow(ctx,
-		`SELECT status, parts_breakdown FROM maintenance_items WHERE id = $1 FOR UPDATE`,
+		`SELECT status, parts_breakdown, COALESCE(pm_schedule_id,''), COALESCE(vehicle_id,''), odo, COALESCE(date::text,'')
+		   FROM maintenance_items WHERE id = $1 FOR UPDATE`,
 		id,
-	).Scan(&status, &breakdownRaw); err != nil {
+	).Scan(&status, &breakdownRaw, &pmScheduleID, &vehicleID, &odo, &woDate); err != nil {
 		respondError(c, err)
 		return
 	}
@@ -1122,7 +1154,24 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	if pmScheduleID != "" {
+		mx := models.MaintenanceItem{
+			PmScheduleID: pmScheduleID,
+			VehicleID:    vehicleID,
+			Odo:          odo,
+			Date:         woDate,
+		}
+		if err := w.Repo.RollPMScheduleFromWorkOrder(ctx, mx); err != nil {
+			respondError(c, err)
+			return
+		}
+	}
 	w.Repo.LogBest(ctx, "complete", "maintenance_item", id, fmt.Sprintf("%d parts decremented", len(lines)), user)
+	w.emitFleet(ctx, events.TypeMaintenanceCompleted, map[string]string{
+		"maintenanceId": id,
+		"vehicleId":     vehicleID,
+		"pmScheduleId":  pmScheduleID,
+	}, id)
 	c.JSON(http.StatusOK, updated)
 }
 

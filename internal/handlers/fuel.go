@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +23,7 @@ type FuelRecords struct {
 }
 
 func NewFuelRecords(repo *store.Repository, bus *events.Bus) *FuelRecords {
-	return &FuelRecords{
+	f := &FuelRecords{
 		inner: Resource[models.FuelRecord, *models.FuelRecord]{
 			Repo:       repo,
 			Collection: repo.Fuel,
@@ -30,6 +32,9 @@ func NewFuelRecords(repo *store.Repository, bus *events.Bus) *FuelRecords {
 		},
 		Events: bus,
 	}
+	f.inner.BeforeCreate = f.beforeWrite
+	f.inner.BeforeUpdate = f.beforeWrite
+	return f
 }
 
 func (f *FuelRecords) Register(rg *gin.RouterGroup, base string) {
@@ -43,7 +48,7 @@ func (f *FuelRecords) Register(rg *gin.RouterGroup, base string) {
 	g.GET("/search", view, f.inner.search)
 	g.GET("/:id", view, f.inner.get)
 	g.POST("", add, f.create)
-	g.POST("/bulk", add, f.inner.bulkCreate)
+	g.POST("/bulk", add, f.bulkCreate)
 	g.PUT("/:id", change, f.inner.replace)
 	g.PATCH("/:id", change, f.patch)
 	g.PATCH("/bulk", change, f.inner.bulkPatch)
@@ -51,7 +56,13 @@ func (f *FuelRecords) Register(rg *gin.RouterGroup, base string) {
 	g.DELETE("/bulk", del, f.inner.bulkDelete)
 
 	g.POST("/:id/anomaly-event", change, f.anomalyEvent)
-	g.POST("/link-events", change, f.linkEvents)
+	g.POST("/reconcile", change, f.reconcile)
+	// Deprecated alias — same handler as /reconcile.
+	g.POST("/link-events", change, f.reconcile)
+}
+
+func (f *FuelRecords) beforeWrite(c *gin.Context, rec *models.FuelRecord) error {
+	return f.enrichFuelRecord(c.Request.Context(), rec, nil)
 }
 
 func (f *FuelRecords) create(c *gin.Context) {
@@ -63,7 +74,10 @@ func (f *FuelRecords) create(c *gin.Context) {
 	if item.ID == "" {
 		item.ID = generateID(f.inner.IDPrefix)
 	}
-	normalizeFuelRecord(&item)
+	if err := f.enrichFuelRecord(c.Request.Context(), &item, nil); err != nil {
+		respondError(c, err)
+		return
+	}
 	created, err := f.inner.Collection.Add(c.Request.Context(), item)
 	if err != nil {
 		respondError(c, err)
@@ -71,7 +85,7 @@ func (f *FuelRecords) create(c *gin.Context) {
 	}
 	f.inner.Repo.LogBest(c.Request.Context(), "create", f.inner.Entity, created.ID, "", currentUser(c, f.inner.Repo))
 	f.publishFuel(c, created)
-	if n, err := jobs.LinkFuelEvents(c.Request.Context(), f.inner.Repo.Pool(), 30); err == nil && n > 0 {
+	if _, err := jobs.ReconcileFuel(c.Request.Context(), f.inner.Repo.FuelDB(), 30, created.VehicleID); err == nil {
 		if refreshed, err := f.inner.Collection.Get(c.Request.Context(), created.ID); err == nil {
 			created = refreshed
 		}
@@ -79,14 +93,102 @@ func (f *FuelRecords) create(c *gin.Context) {
 	c.JSON(http.StatusCreated, created)
 }
 
-func (f *FuelRecords) linkEvents(c *gin.Context) {
+func (f *FuelRecords) bulkCreate(c *gin.Context) {
+	var items []models.FuelRecord
+	if err := c.ShouldBindJSON(&items); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(items) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty batch"})
+		return
+	}
+	if len(items) > maxBulkItems {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error":  "batch too large",
+			"limit":  maxBulkItems,
+			"actual": len(items),
+		})
+		return
+	}
+	for i := range items {
+		if items[i].ID == "" {
+			items[i].ID = generateID(f.inner.IDPrefix)
+		}
+	}
+
+	ctx := c.Request.Context()
+	existingByVeh, err := f.loadFuelHistoryByVehicle(ctx, items)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	byVeh := make(map[string][]*models.FuelRecord)
+	for i := range items {
+		byVeh[items[i].VehicleID] = append(byVeh[items[i].VehicleID], &items[i])
+	}
+	for _, batch := range byVeh {
+		sort.SliceStable(batch, func(i, j int) bool {
+			if batch[i].Date != batch[j].Date {
+				return batch[i].Date < batch[j].Date
+			}
+			return batch[i].ID < batch[j].ID
+		})
+		accum := append([]models.FuelRecord(nil), existingByVeh[batch[0].VehicleID]...)
+		for _, rec := range batch {
+			accum = fueldetect.UpsertHistoryRecord(accum, rec)
+			if err := f.enrichFuelRecord(ctx, rec, accum); err != nil {
+				respondError(c, err)
+				return
+			}
+		}
+	}
+
+	created, err := f.inner.Collection.BulkAdd(ctx, items)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	user := currentUser(c, f.inner.Repo)
+	for i := range created {
+		f.inner.Repo.LogBest(ctx, "create", f.inner.Entity, created[i].ID, "bulk", user)
+	}
+	c.JSON(http.StatusCreated, gin.H{"added": len(created), "items": created})
+}
+
+func (f *FuelRecords) loadFuelHistoryByVehicle(ctx context.Context, items []models.FuelRecord) (map[string][]models.FuelRecord, error) {
+	vehIDs := make(map[string]struct{})
+	for _, it := range items {
+		if it.VehicleID != "" {
+			vehIDs[it.VehicleID] = struct{}{}
+		}
+	}
+	out := make(map[string][]models.FuelRecord, len(vehIDs))
+	for vid := range vehIDs {
+		rows, _, err := f.inner.Repo.Fuel.ListFiltered(ctx, store.ListFilter{
+			Filters:  map[string]string{"vehicle_id": vid},
+			Limit:    500,
+			OrderBy:  "date",
+			OrderAsc: true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out[vid] = rows
+	}
+	return out, nil
+}
+
+func (f *FuelRecords) reconcile(c *gin.Context) {
 	lookback, _ := strconv.Atoi(c.DefaultQuery("lookbackDays", "90"))
-	linked, err := jobs.LinkFuelEvents(c.Request.Context(), f.inner.Repo.Pool(), lookback)
+	vehicleID := c.Query("vehicleId")
+	result, err := jobs.ReconcileFuel(c.Request.Context(), f.inner.Repo.FuelDB(), lookback, vehicleID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"linked": linked})
+	c.JSON(http.StatusOK, result)
 }
 
 func (f *FuelRecords) patch(c *gin.Context) {
@@ -107,7 +209,10 @@ func (f *FuelRecords) patch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	normalizeFuelRecord(&merged)
+	if err := f.enrichFuelRecord(ctx, &merged, nil); err != nil {
+		respondError(c, err)
+		return
+	}
 	updated, err := f.inner.Collection.Replace(ctx, id, merged)
 	if err != nil {
 		respondError(c, err)
@@ -137,17 +242,39 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func normalizeFuelRecord(rec *models.FuelRecord) {
+// enrichFuelRecord runs anomaly detection. batchHistory, when non-nil, is used
+// instead of loading from the DB (bulk import within one vehicle batch).
+func (f *FuelRecords) enrichFuelRecord(ctx context.Context, rec *models.FuelRecord, batchHistory []models.FuelRecord) error {
 	hadAnomaly := rec.Anomaly != nil && *rec.Anomaly
-	fueldetect.EnrichAnomaly(rec)
+	var actx fueldetect.AnomalyContext
+	var err error
+	if batchHistory != nil {
+		tank, tracked := 0, false
+		if veh, e := f.inner.Repo.Vehicles.Get(ctx, rec.VehicleID); e == nil {
+			if veh.TankCapacityLitres != nil {
+				tank = *veh.TankCapacityLitres
+			}
+			tracked = veh.FuelTracker
+		}
+		telL := 0.0
+		if rec.FuelEventID != nil && *rec.FuelEventID > 0 {
+			telL = fueldetect.LoadTelemetryLitres(ctx, f.inner.Repo, *rec.FuelEventID)
+		}
+		actx = fueldetect.BuildAnomalyContextFromHistory(rec, batchHistory, tank, tracked, telL)
+	} else {
+		actx, err = fueldetect.BuildAnomalyContext(ctx, f.inner.Repo, rec)
+		if err != nil {
+			return err
+		}
+	}
+	fueldetect.ApplyEnrichment(rec, actx)
 	if rec.Anomaly != nil && *rec.Anomaly && !hadAnomaly {
 		if len(rec.AnomalyHistory) == 0 {
 			appendAnomalyEvent(&rec.AnomalyHistory, "flagged", "", rec.AnomalyReason)
 		}
-		if rec.AnomalyStatus == "" {
-			rec.AnomalyStatus = "open"
-		}
+		rec.AnomalyStatus = "open"
 	}
+	return nil
 }
 
 type fuelAnomalyEventBody struct {

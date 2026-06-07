@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestRequireVehicleForTrack_nilRepoSkipsValidation(t *testing.T) {
@@ -17,6 +18,16 @@ func TestRequireVehicleForTrack_nilRepoSkipsValidation(t *testing.T) {
 
 	if !h.requireVehicleForTrack(c, "UNKNOWN") {
 		t.Fatal("nil repo should skip vehicle validation")
+	}
+}
+
+func TestRespondIotError_duplicateSerial409(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	respondIotError(c, &pgconn.PgError{Code: "23505", ConstraintName: "iot_devices_serial_key"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409", w.Code)
 	}
 }
 

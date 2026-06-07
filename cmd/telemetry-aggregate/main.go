@@ -22,6 +22,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/jobs"
+	fleetstore "github.com/iag/fleet-tool/backend/internal/store"
 )
 
 func main() {
@@ -62,7 +63,7 @@ func main() {
 	eventBus := events.NewFromEnv()
 	defer func() { _ = eventBus.Close() }()
 
-	written, eventsWritten, failed, err := jobs.AggregateTelemetry(ctx, store, eventBus, operationalPool, from, to, *vehicleFlag)
+	written, eventsWritten, failed, err := jobs.AggregateTelemetry(ctx, store, eventBus, fleetstore.FuelDB{Operational: operationalPool, Telemetry: telemetryPool}, from, to, *vehicleFlag)
 	if err != nil {
 		log.Fatalf("aggregate: %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/config"
 	"github.com/iag/fleet-tool/backend/internal/events"
@@ -80,6 +81,9 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	r.Use(fleetmw.RequestAudit(repo))
 
 	api := r.Group("/api")
+	if opts.Config.StrictRBAC() {
+		api.Use(auth.StrictRBAC())
+	}
 
 	// Per-endpoint rate limits. The numbers are conservative defaults;
 	// raise via env or a follow-up if real traffic warrants. Keys go to
@@ -98,9 +102,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// resolve to real permissions.
 	handlers.NewVehicleResource(repo, opts.Events).Register(api, "/vehicles")
 
-	(&handlers.Resource[models.Driver, *models.Driver]{
-		Repo: repo, Collection: repo.Drivers, Entity: "driver", IDPrefix: "DRV",
-	}).Register(api, "/drivers")
+	handlers.NewDriverResource(repo).Register(api, "/drivers")
 
 	handlers.NewJMPs(repo, opts.RoutingOSRMURL).Register(api, "/jmps")
 
@@ -134,9 +136,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 		Repo: repo, Collection: repo.Safety, Entity: "safety_event", IDPrefix: "SAF",
 	}).Register(api, "/safety")
 
-	(&handlers.Resource[models.ComplianceItem, *models.ComplianceItem]{
-		Repo: repo, Collection: repo.Compliance, Entity: "compliance_item", IDPrefix: "CMP",
-	}).Register(api, "/compliance")
+	handlers.NewComplianceResource(repo).Register(api, "/compliance")
 
 	(&handlers.Resource[models.ServiceRequest, *models.ServiceRequest]{
 		Repo: repo, Collection: repo.Requests, Entity: "service_request", IDPrefix: "REQ",
@@ -154,7 +154,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	(&handlers.Reference{Cache: opts.Cache, TTL: opts.TTLReference}).Register(api)
 	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL, Config: opts.Config}).Register(api)
 	(&handlers.Inspections{Repo: repo}).Register(api)
-	(&handlers.PMSchedules{Repo: repo}).Register(api)
+	(&handlers.PMSchedules{Repo: repo, Events: opts.Events}).Register(api)
 	(&handlers.Dashboard{Repo: repo, Cache: opts.Cache, TTL: opts.TTLDashboard}).Register(api)
 	(&handlers.Analytics{Repo: repo, Cache: opts.Cache, TTL: opts.TTLAnalytics}).Register(api)
 	(&handlers.Reports{Repo: repo}).Register(api)

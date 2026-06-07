@@ -17,6 +17,7 @@ import (
 //   - maintenance_items.status_history     → StatusHistory ([]StatusHistoryEvent)
 //   - safety_events.status_history         → StatusHistory
 //   - fuel_records.anomaly_history         → AnomalyHistory ([]AnomalyHistoryEvent)
+//   - fuel_records.anomaly_types           → AnomalyTypes ([]string)
 //
 // pgx delivers JSONB as []byte (or string) on Scan; we json.Unmarshal.
 // On Value (INSERT/UPDATE bind), we json.Marshal — pgx converts that
@@ -168,6 +169,25 @@ func (h AnomalyHistory) Value() (driver.Value, error) {
 		return []byte(`[]`), nil
 	}
 	return json.Marshal(h)
+}
+
+// AnomalyTypes is every rule that fired on a fuel record (primary in anomaly_type).
+type AnomalyTypes []string
+
+func (t *AnomalyTypes) Scan(src any) error {
+	b, err := jsonbBytes(src)
+	if err != nil || b == nil {
+		*t = nil
+		return err
+	}
+	return json.Unmarshal(b, t)
+}
+
+func (t AnomalyTypes) Value() (driver.Value, error) {
+	if t == nil {
+		return []byte(`[]`), nil
+	}
+	return json.Marshal(t)
 }
 
 func (c *InspectionChecklist) Scan(src any) error {

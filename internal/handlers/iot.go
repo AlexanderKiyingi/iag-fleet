@@ -113,11 +113,7 @@ func (h *IoT) createDevice(c *gin.Context) {
 		IssueKey:  body.IssueKey,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "23505") { // unique_violation
-			c.JSON(http.StatusConflict, gin.H{"error": "serial already registered"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondIotError(c, err)
 		return
 	}
 	// `apiKey` is the only time the plaintext is ever exposed.
@@ -825,6 +821,10 @@ func parseTrackAfter(v string) (*time.Time, error) {
 }
 
 func respondIotError(c *gin.Context, err error) {
+	if isUniqueViolation(err) {
+		c.JSON(http.StatusConflict, gin.H{"error": "serial already registered"})
+		return
+	}
 	switch {
 	case errors.Is(err, iot.ErrDeviceNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
