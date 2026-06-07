@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/cache"
+	"github.com/iag/fleet-tool/backend/internal/config"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/handlers"
 	"github.com/iag/fleet-iot/iot"
@@ -23,6 +24,7 @@ import (
 
 // Options configures the router.
 type Options struct {
+	Config        config.Config
 	AllowedOrigin string
 	PlatformAuth  *fleetmw.PlatformAuth
 	IoTStore      *iot.Store
@@ -94,9 +96,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// Resource Entity values match the codenames seeded in db/seed.sql so
 	// "view_<entity>", "add_<entity>", "change_<entity>", "delete_<entity>"
 	// resolve to real permissions.
-	(&handlers.Resource[models.Vehicle, *models.Vehicle]{
-		Repo: repo, Collection: repo.Vehicles, Entity: "vehicle", IDPrefix: "VEH",
-	}).Register(api, "/vehicles")
+	handlers.NewVehicleResource(repo, opts.Events).Register(api, "/vehicles")
 
 	(&handlers.Resource[models.Driver, *models.Driver]{
 		Repo: repo, Collection: repo.Drivers, Entity: "driver", IDPrefix: "DRV",
@@ -150,9 +150,9 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 		Repo: repo, Collection: repo.Deployment, Entity: "deployment_day", IDPrefix: "DPL",
 	}).Register(api, "/deployment")
 
-	(&handlers.Admin{Repo: repo, Cache: opts.Cache}).Register(api)
+	(&handlers.Admin{Repo: repo, Cache: opts.Cache, Config: opts.Config}).Register(api)
 	(&handlers.Reference{Cache: opts.Cache, TTL: opts.TTLReference}).Register(api)
-	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL}).Register(api)
+	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL, Config: opts.Config}).Register(api)
 	(&handlers.Inspections{Repo: repo}).Register(api)
 	(&handlers.PMSchedules{Repo: repo}).Register(api)
 	(&handlers.Dashboard{Repo: repo, Cache: opts.Cache, TTL: opts.TTLDashboard}).Register(api)
@@ -175,7 +175,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// Always attach IoT routes so the route table matches the Next.js client
 	// even if a test harness omits a store — handlers return 503 when
 	// telemetry is not configured instead of 404-no-route.
-	(&handlers.IoT{Store: opts.IoTStore, Hub: opts.IoTHub, Repo: repo}).Register(api)
+	(&handlers.IoT{Store: opts.IoTStore, Hub: opts.IoTHub, Repo: repo, Events: opts.Events}).Register(api)
 
 	return r
 }

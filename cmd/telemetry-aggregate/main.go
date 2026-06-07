@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-iot/iot"
@@ -40,17 +42,27 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	pool, err := db.Connect(ctx, "")
+	operationalPool, err := db.Connect(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("connect Postgres: %v", err)
+		log.Fatalf("connect operational Postgres: %v", err)
 	}
-	defer pool.Close()
+	defer operationalPool.Close()
 
-	store := iot.NewStore(pool)
+	var telemetryPool *pgxpool.Pool
+	telemetryURL := strings.TrimSpace(os.Getenv("TELEMETRY_DATABASE_URL"))
+	if telemetryURL != "" && telemetryURL != strings.TrimSpace(os.Getenv("DATABASE_URL")) {
+		telemetryPool, err = db.Connect(ctx, telemetryURL)
+		if err != nil {
+			log.Fatalf("connect telemetry Postgres: %v", err)
+		}
+		defer telemetryPool.Close()
+	}
+
+	store := iot.NewSplitStore(operationalPool, telemetryPool)
 	eventBus := events.NewFromEnv()
 	defer func() { _ = eventBus.Close() }()
 
-	written, eventsWritten, failed, err := jobs.AggregateTelemetry(ctx, store, eventBus, pool, from, to, *vehicleFlag)
+	written, eventsWritten, failed, err := jobs.AggregateTelemetry(ctx, store, eventBus, operationalPool, from, to, *vehicleFlag)
 	if err != nil {
 		log.Fatalf("aggregate: %v", err)
 	}

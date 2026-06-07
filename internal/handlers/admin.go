@@ -10,14 +10,16 @@ import (
 	"github.com/alvor-technologies/iag-platform-go/apierr"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/cache"
+	"github.com/iag/fleet-tool/backend/internal/config"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
 
 // Admin owns the non-CRUD endpoints: ticker, audit, export/import/reset.
 type Admin struct {
-	Repo  *store.Repository
-	Cache cache.Cache
+	Repo   *store.Repository
+	Cache  cache.Cache
+	Config config.Config
 }
 
 func (a *Admin) Register(rg *gin.RouterGroup) {
@@ -297,6 +299,9 @@ func (a *Admin) importAll(c *gin.Context) {
 }
 
 func (a *Admin) reset(c *gin.Context) {
+	if denyIfProduction(c, a.Config, "reset_data") {
+		return
+	}
 	ctx := c.Request.Context()
 	type clearFn func() error
 	steps := []clearFn{

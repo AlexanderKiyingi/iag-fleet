@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-iot/iot"
@@ -54,12 +56,22 @@ func main() {
 	ctxAgg, cancelAgg := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancelAgg()
 
-	pool, err := db.Connect(ctxAgg, "")
+	operationalPool, err := db.Connect(ctxAgg, os.Getenv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("connect Postgres: %v", err)
+		log.Fatalf("connect operational Postgres: %v", err)
 	}
-	defer pool.Close()
-	iotStore := iot.NewStore(pool)
+	defer operationalPool.Close()
+
+	var telemetryPool *pgxpool.Pool
+	telemetryURL := strings.TrimSpace(os.Getenv("TELEMETRY_DATABASE_URL"))
+	if telemetryURL != "" && telemetryURL != strings.TrimSpace(os.Getenv("DATABASE_URL")) {
+		telemetryPool, err = db.Connect(ctxAgg, telemetryURL)
+		if err != nil {
+			log.Fatalf("connect telemetry Postgres: %v", err)
+		}
+		defer telemetryPool.Close()
+	}
+	iotStore := iot.NewSplitStore(operationalPool, telemetryPool)
 
 	eventBus := events.NewFromEnv()
 	defer func() { _ = eventBus.Close() }()
@@ -73,7 +85,7 @@ func main() {
 			log.Fatalf("aggregate range: %v", err)
 		}
 		log.Printf("fleet-jobs: aggregating %s .. %s", from.Format(jobs.DayLayout), to.Add(-time.Nanosecond).Format(jobs.DayLayout))
-		written, ev, failed, err := jobs.AggregateTelemetry(ctxAgg, iotStore, eventBus, pool, from, to, *vehicleFlag)
+		written, ev, failed, err := jobs.AggregateTelemetry(ctxAgg, iotStore, eventBus, operationalPool, from, to, *vehicleFlag)
 		if err != nil {
 			log.Fatalf("aggregate: %v", err)
 		}
@@ -86,7 +98,7 @@ func main() {
 			}
 		}
 		if *doAll {
-			linked, err := jobs.LinkFuelEvents(ctxAgg, pool, *linkDays)
+			linked, err := jobs.LinkFuelEvents(ctxAgg, operationalPool, *linkDays)
 			if err != nil {
 				log.Printf("fleet-jobs link-fuel: %v", err)
 			} else {
@@ -96,7 +108,7 @@ func main() {
 	}
 
 	if runLink {
-		linked, err := jobs.LinkFuelEvents(ctxAgg, pool, *linkDays)
+		linked, err := jobs.LinkFuelEvents(ctxAgg, operationalPool, *linkDays)
 		if err != nil {
 			log.Fatalf("link-fuel: %v", err)
 		}
@@ -128,7 +140,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("detect-trips range: %v", err)
 		}
-		repo := store.NewRepository(pool)
+		repo := store.NewRepository(operationalPool)
 		n, err := jobs.DetectTripsFromTelemetry(ctxAgg, iotStore, repo, from, to)
 		if err != nil {
 			log.Fatalf("detect-trips: %v", err)

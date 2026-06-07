@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -14,9 +15,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/iag/fleet-tool/backend/internal/auth"
+	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
+
+var errDriverNotFound = errors.New("driver not found")
 
 // Resource binds a Collection to a route group with full CRUD.
 //   GET    /<base>          → list
@@ -32,6 +37,13 @@ type Resource[T any, PT store.IdentifiablePtr[T]] struct {
 	Entity string
 	// IDPrefix is used when generating IDs for items posted without one.
 	IDPrefix string
+	Events   *events.Bus
+	// Optional hooks for entity-specific validation and side effects.
+	BeforeCreate func(c *gin.Context, item *T) error
+	BeforeUpdate func(c *gin.Context, item *T) error
+	AfterCreate  func(ctx context.Context, item T)
+	AfterUpdate  func(ctx context.Context, before, after T)
+	AfterDelete  func(ctx context.Context, id string)
 }
 
 func (r *Resource[T, PT]) Register(rg *gin.RouterGroup, base string) {
@@ -102,10 +114,19 @@ func (r *Resource[T, PT]) create(c *gin.Context) {
 	if id := PT(&item).GetID(); id == "" {
 		PT(&item).SetID(generateID(r.IDPrefix))
 	}
+	if r.BeforeCreate != nil {
+		if err := r.BeforeCreate(c, &item); err != nil {
+			respondMutationError(c, err)
+			return
+		}
+	}
 	created, err := r.Collection.Add(c.Request.Context(), item)
 	if err != nil {
 		respondError(c, err)
 		return
+	}
+	if r.AfterCreate != nil {
+		r.AfterCreate(c.Request.Context(), created)
 	}
 	r.Repo.LogBest(c.Request.Context(), "create", r.Entity, PT(&created).GetID(), "", currentUser(c, r.Repo))
 	c.JSON(http.StatusCreated, created)
@@ -346,10 +367,24 @@ func (r *Resource[T, PT]) replace(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
+	if r.BeforeUpdate != nil {
+		if err := r.BeforeUpdate(c, &item); err != nil {
+			respondMutationError(c, err)
+			return
+		}
+	}
+	existing, err := r.Collection.Get(c.Request.Context(), id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
 	updated, err := r.Collection.Replace(c.Request.Context(), id, item)
 	if err != nil {
 		respondError(c, err)
 		return
+	}
+	if r.AfterUpdate != nil {
+		r.AfterUpdate(c.Request.Context(), existing, updated)
 	}
 	r.Repo.LogBest(c.Request.Context(), "update", r.Entity, id, "", currentUser(c, r.Repo))
 	c.JSON(http.StatusOK, updated)
@@ -382,11 +417,20 @@ func (r *Resource[T, PT]) patch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if r.BeforeUpdate != nil {
+		if err := r.BeforeUpdate(c, &merged); err != nil {
+			respondMutationError(c, err)
+			return
+		}
+	}
 
 	updated, err := r.Collection.Replace(ctx, id, merged)
 	if err != nil {
 		respondError(c, err)
 		return
+	}
+	if r.AfterUpdate != nil {
+		r.AfterUpdate(ctx, existing, updated)
 	}
 	r.Repo.LogBest(ctx, "update", r.Entity, id, "", currentUser(c, r.Repo))
 	c.JSON(http.StatusOK, updated)
@@ -397,6 +441,9 @@ func (r *Resource[T, PT]) remove(c *gin.Context) {
 	if err := r.Collection.Delete(c.Request.Context(), id); err != nil {
 		respondError(c, err)
 		return
+	}
+	if r.AfterDelete != nil {
+		r.AfterDelete(c.Request.Context(), id)
 	}
 	r.Repo.LogBest(c.Request.Context(), "delete", r.Entity, id, "", currentUser(c, r.Repo))
 	c.Status(http.StatusNoContent)
@@ -434,7 +481,24 @@ func respondError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	if isUniqueViolation(err) {
+		c.JSON(http.StatusConflict, gin.H{"error": "duplicate value"})
+		return
+	}
 	c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+}
+
+func respondMutationError(c *gin.Context, err error) {
+	if errors.Is(err, errDriverNotFound) || errors.Is(err, store.ErrNotFound) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	respondError(c, err)
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func generateID(prefix string) string {

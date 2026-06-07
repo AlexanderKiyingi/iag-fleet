@@ -9,8 +9,11 @@ import (
 	"context"
 	"flag"
 	"log"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/jobs"
@@ -26,13 +29,23 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	pool, err := db.Connect(ctx, "")
+	operationalPool, err := db.Connect(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("connect Postgres: %v", err)
+		log.Fatalf("connect operational Postgres: %v", err)
 	}
-	defer pool.Close()
+	defer operationalPool.Close()
 
-	store := iot.NewStore(pool)
+	var telemetryPool *pgxpool.Pool
+	telemetryURL := strings.TrimSpace(os.Getenv("TELEMETRY_DATABASE_URL"))
+	if telemetryURL != "" && telemetryURL != strings.TrimSpace(os.Getenv("DATABASE_URL")) {
+		telemetryPool, err = db.Connect(ctx, telemetryURL)
+		if err != nil {
+			log.Fatalf("connect telemetry Postgres: %v", err)
+		}
+		defer telemetryPool.Close()
+	}
+
+	store := iot.NewSplitStore(operationalPool, telemetryPool)
 	cutoff := time.Now().UTC().Add(-time.Duration(*days) * 24 * time.Hour)
 
 	n, err := jobs.PurgeTelemetryPings(ctx, store, *days)

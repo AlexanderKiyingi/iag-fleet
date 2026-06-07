@@ -417,7 +417,7 @@ Email links assume these frontend routes exist (build them in the Next.js app):
 
 ## IoT / GPS live tracking, history, fuel monitoring
 
-Ingest runs in **Fleet_IoT** (`edge/Fleet_IoT`); this service reads the same **`telemetry_timeseries`** Timescale hypertable via the shared `github.com/iag/fleet-iot/iot` module.
+Ingest runs in **Fleet_IoT** (`edge/Fleet_IoT`). Fleet API reads **`telemetry_timeseries`** via `TELEMETRY_DATABASE_URL` when split from the operational registry (`DATABASE_URL`). Local dev uses one DSN for both; production Compose/K8s use dedicated Timescale for pings and `REGISTRY_DATABASE_URL` on ingest for `SyncVehicleFromPing`. See [docs/PRODUCTION_CHECKLIST.md](./docs/PRODUCTION_CHECKLIST.md).
 
 1. **HTTP bulk ingest** — `POST /api/iot/pings` or `POST /v1/pings` on Fleet_IoT (`:4080`, or via gateway `/api/v1/fleet/api/iot/pings`). Device API key in `Authorization: Bearer <key>`. Up to 1000 pings per request.
 2. **Native Codec 8/8E TCP** — Fleet_IoT `cmd/gateway` on `:5027` (`IOT_ADDR`). Teltonika units identify by IMEI against `iot_devices.serial`.
@@ -612,7 +612,7 @@ The image is `gcr.io/distroless/static-debian12:nonroot` — no shell, no packag
 - **Password policy / lockout / 2FA**: not implemented.
 - **Audit user**: pulled from the active session (`auth.UserFrom(c).Username`); falls back to the `X-Operator` header (legacy) and finally to the ticker operator.
 - **Audit log persistence**: now in Postgres (`audit_entries`); writes resolve `user_id` from the username when the user exists, otherwise just record the username string snapshot.
-- **Telemetry → vehicles hot-state sync**: the gateway and HTTP ingestion call `SyncVehicleFromPing`, which updates the same `vehicles` row the CRUD endpoints serve, so the freshest position appears on `GET /api/vehicles/:id` automatically.
+- **Telemetry → vehicles hot-state sync**: Fleet_IoT calls `SyncVehicleFromPing` on the **operational** DB (`REGISTRY_DATABASE_URL` / Fleet `DATABASE_URL`), so live map and `GET /api/vehicles/:id` stay aligned with CRUD even when pings live on Timescale.
 - **Cross-process SSE**: the in-process broker only fans out pings ingested via the same API instance. Pings from `cmd/iot-gateway` (separate process) reach SSE clients via the 2-second poll fallback. For sub-second cross-process live, swap the broker for Postgres `LISTEN/NOTIFY` or Redis pubsub.
 - **Codec 8E variable-length IO**: the parser advances the cursor past each variable-length element but doesn't currently persist the payload. Add to `raw` JSON if you need CAN frames on the wire.
 

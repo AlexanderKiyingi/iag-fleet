@@ -25,6 +25,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/migrate"
 	fleetmw "github.com/iag/fleet-tool/backend/internal/middleware"
 	"github.com/iag/fleet-tool/backend/internal/notifications"
+	"github.com/iag/fleet-tool/backend/internal/outbox"
 	"github.com/iag/fleet-tool/backend/internal/platform"
 	"github.com/iag/fleet-tool/backend/internal/platformregister"
 	"github.com/iag/fleet-tool/backend/internal/router"
@@ -40,22 +41,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	if os.Getenv("DATABASE_URL") == "" {
-		slog.Error("DATABASE_URL is required (e.g. postgres://user:pass@host:5432/dbname)")
-		os.Exit(1)
-	}
+	appCtx, cancelApp := context.WithCancel(context.Background())
+	defer cancelApp()
 
 	connectCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	pool, err := pgdb.Connect(connectCtx, "")
+	operationalPool, err := pgdb.Connect(connectCtx, cfg.DatabaseURL)
 	cancel()
 	if err != nil {
-		slog.Error("connect Postgres", "err", err)
+		slog.Error("connect operational Postgres", "err", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
+	defer operationalPool.Close()
+
+	var telemetryPool *pgxpool.Pool
+	if cfg.TelemetrySplit() {
+		connectCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		telemetryPool, err = pgdb.Connect(connectCtx, cfg.TelemetryDatabaseURL)
+		cancel()
+		if err != nil {
+			slog.Error("connect telemetry Postgres", "err", err)
+			os.Exit(1)
+		}
+		defer telemetryPool.Close()
+		slog.Info("dual-database mode", "telemetry", "enabled")
+	}
 
 	if cfg.AutoMigrate {
-		if err := autoMigrate(context.Background(), pool); err != nil {
+		if err := autoMigrate(context.Background(), operationalPool); err != nil {
 			slog.Error("auto-migrate failed; refusing to serve", "err", err)
 			os.Exit(1)
 		}
@@ -63,8 +75,8 @@ func main() {
 		slog.Info("auto-migrate disabled — assuming schema is current")
 	}
 
-	repo := store.NewRepository(pool)
-	iotStore := iot.NewStore(pool)
+	repo := store.NewRepository(operationalPool)
+	iotStore := iot.NewSplitStore(operationalPool, telemetryPool)
 	verifier := authclient.NewVerifier(authclient.Options{
 		JWKSURL:  cfg.JWKSURL,
 		Issuer:   cfg.JWTIssuer,
@@ -106,7 +118,11 @@ func main() {
 	})
 	defer func() { _ = eventBus.Close() }()
 	if eventBus.Enabled() {
-		slog.Info("event bus enabled", "brokers", cfg.KafkaBrokers)
+		outboxStore := outbox.NewStore(operationalPool)
+		eventBus.SetOutbox(outboxStore)
+		outboxPublisher := outbox.NewPublisher(outboxStore, outboxDispatcher{bus: eventBus})
+		go outboxPublisher.Run(appCtx)
+		slog.Info("event bus enabled", "brokers", cfg.KafkaBrokers, "outbox", true)
 	}
 
 	platformSvc := platform.LoadServices()
@@ -117,6 +133,7 @@ func main() {
 	go platformregister.PermissionsLoop(context.Background(), cfg)
 
 	r := router.New(repo, router.Options{
+		Config:              cfg,
 		AllowedOrigin:       cfg.CORSOrigin,
 		PlatformAuth:        platformAuth,
 		Platform:            platformSvc,
@@ -181,6 +198,18 @@ func main() {
 	} else {
 		slog.Info("graceful shutdown complete")
 	}
+	cancelApp()
+}
+
+type outboxDispatcher struct {
+	bus *events.Bus
+}
+
+func (d outboxDispatcher) DispatchOutbox(ctx context.Context, row outbox.Row) error {
+	if d.bus == nil {
+		return nil
+	}
+	return d.bus.DispatchOutbox(ctx, row.EventType, row.EventKey, row.Payload)
 }
 
 func configureLogger() {

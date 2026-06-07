@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
+	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
@@ -40,8 +41,9 @@ import (
 //	  manual fuel data but still need IoT-driven charts on vehicle pages.
 type IoT struct {
 	Store  *iot.Store
-	Hub *iot.Hub
+	Hub    *iot.Hub
 	Repo   *store.Repository // optional: vehicle validation + list enrichment; nil in tests
+	Events *events.Bus       // optional: registry events from test-ping path
 }
 
 // requireStore ensures telemetry tables are wired; tests may build a
@@ -316,9 +318,19 @@ func (h *IoT) testPing(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.Store.SyncVehicleFromPing(ctx, p); err != nil {
+	syncRes, err := h.Store.SyncVehicleFromPing(ctx, p)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	// Fleet API outbox only — do not also call PublishStatusChange (would duplicate rows).
+	if h.Events != nil && syncRes.Changed {
+		h.Events.PublishFleet(ctx, events.TypeVehicleStatusChanged, events.FleetEventData(map[string]string{
+			"vehicleId":      syncRes.VehicleID,
+			"status":         syncRes.NewStatus,
+			"previousStatus": syncRes.PreviousStatus,
+			"source":         "test_ping",
+		}), syncRes.VehicleID, "")
 	}
 	_ = h.Store.MarkSeen(ctx, devID, c.ClientIP())
 	if h.Hub != nil {

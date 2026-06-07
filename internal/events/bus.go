@@ -29,6 +29,9 @@ const (
 	// these type strings.
 	TypeFleetAlertRaised        = "fleet.alert.raised"
 	TypeFinanceFuelRecorded     = "fleet.fuel.recorded"
+	TypeVehicleCreated          = "fleet.vehicle.created"
+	TypeVehicleUpdated          = "fleet.vehicle.updated"
+	TypeVehicleDeleted          = "fleet.vehicle.deleted"
 	TypeVehicleStatusChanged    = "fleet.vehicle.status_changed"
 	TypeJMPCompleted            = "fleet.jmp.completed"
 	TypeJMPCancelled            = "fleet.jmp.cancelled"
@@ -40,10 +43,15 @@ const (
 	TypeServiceRequestAssigned  = "fleet.service_request.assigned"
 )
 
+type outboxEnqueuer interface {
+	Enqueue(ctx context.Context, eventType, key string, payload any) error
+}
+
 // Bus publishes fleet domain events to iag.fleet.
 type Bus struct {
 	fleetWriter *kafka.Writer
 	enabled     bool
+	store       outboxEnqueuer
 }
 
 // Config for optional Kafka publishing.
@@ -88,6 +96,17 @@ func (b *Bus) Close() error {
 
 // Enabled reports whether Kafka publishing is active.
 func (b *Bus) Enabled() bool { return b != nil && b.enabled }
+
+// UsesOutbox reports whether events are enqueued transactionally.
+func (b *Bus) UsesOutbox() bool { return b != nil && b.store != nil }
+
+// SetOutbox attaches the transactional outbox store.
+func (b *Bus) SetOutbox(store outboxEnqueuer) {
+	if b == nil {
+		return
+	}
+	b.store = store
+}
 
 // PlatformEvent is the canonical IAG envelope (mirrors @iag/events).
 type PlatformEvent struct {
@@ -136,7 +155,8 @@ func (b *Bus) publish(ctx context.Context, evt PlatformEvent, key string) error 
 }
 
 // PublishFleet emits a domain event on iag.fleet. Errors are logged; callers
-// do not fail their HTTP request.
+// do not fail their HTTP request. When an outbox is configured, events are
+// enqueued for the background publisher instead of written directly.
 func (b *Bus) PublishFleet(ctx context.Context, eventType string, data map[string]any, key, correlationID string) {
 	if !b.enabled {
 		return
@@ -146,9 +166,46 @@ func (b *Bus) PublishFleet(ctx context.Context, eventType string, data map[strin
 		Data:          data,
 		CorrelationID: correlationID,
 	}
+	if b.store != nil {
+		if err := b.store.Enqueue(ctx, eventType, key, evt); err != nil {
+			slog.Warn("fleet event enqueue failed", "type", eventType, "err", err)
+		}
+		return
+	}
 	if err := b.publish(ctx, evt, key); err != nil {
 		slog.Warn("fleet event publish failed", "type", eventType, "err", err)
 	}
+}
+
+// DispatchOutbox writes a pre-serialized outbox envelope to Kafka.
+func (b *Bus) DispatchOutbox(ctx context.Context, eventType, eventKey string, payload []byte) error {
+	if !b.enabled || b.fleetWriter == nil {
+		return nil
+	}
+	var evt PlatformEvent
+	if err := json.Unmarshal(payload, &evt); err != nil {
+		return fmt.Errorf("decode outbox payload: %w", err)
+	}
+	if evt.Type == "" {
+		evt.Type = eventType
+	}
+	if evt.ID == "" {
+		evt.ID = uuid.NewString()
+	}
+	if evt.Source == "" {
+		evt.Source = Source
+	}
+	if evt.SpecVersion == "" {
+		evt.SpecVersion = SpecVersion
+	}
+	if evt.Time == "" {
+		evt.Time = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	key := eventKey
+	if key == "" {
+		key = evt.ID
+	}
+	return b.publish(ctx, evt, key)
 }
 
 // PublishFleetAlert emits fleet.alert.raised on iag.fleet. The notifications

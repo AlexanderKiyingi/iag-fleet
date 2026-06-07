@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
+	"github.com/iag/fleet-tool/backend/internal/config"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	jmpplan "github.com/iag/fleet-tool/backend/internal/jmp"
 	"github.com/iag/fleet-tool/backend/internal/models"
@@ -23,6 +24,7 @@ type Workflows struct {
 	Repo           *store.Repository
 	Events         *events.Bus
 	RoutingOSRMURL string
+	Config         config.Config
 }
 
 func (w *Workflows) Register(rg *gin.RouterGroup) {
@@ -745,6 +747,9 @@ const simTickMs = 15000
 // heading, mirroring lib/simulator.tsx so the simulator can be driven by the
 // backend instead of the browser.
 func (w *Workflows) simulateTick(c *gin.Context) {
+	if denyIfProduction(c, w.Config, "simulate_vehicles") {
+		return
+	}
 	ctx := c.Request.Context()
 	vehicles, err := w.Repo.Vehicles.List(ctx)
 	if err != nil {
