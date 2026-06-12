@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/alvor-technologies/iag-platform-go/authclient"
+	platformotel "github.com/alvor-technologies/iag-platform-go/otel"
 	"github.com/iag/fleet-tool/backend/db"
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/config"
@@ -43,6 +44,22 @@ func main() {
 
 	appCtx, cancelApp := context.WithCancel(context.Background())
 	defer cancelApp()
+
+	// OpenTelemetry tracing → otel-collector:4317 (non-blocking dial). Degrade
+	// to a no-op tracer on error rather than failing boot; tracing is
+	// observability, not correctness.
+	if tp, oerr := platformotel.Init(appCtx, platformotel.Config{
+		ServiceName: "iag-fleet",
+		Environment: cfg.Environment,
+	}); oerr != nil {
+		slog.Warn("otel disabled", "err", oerr)
+	} else {
+		defer func() {
+			shutCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			defer c()
+			_ = tp.Shutdown(shutCtx)
+		}()
+	}
 
 	connectCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	operationalPool, err := pgdb.Connect(connectCtx, cfg.DatabaseURL)
