@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/config"
@@ -64,6 +66,9 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	}
 
 	r := gin.Default()
+	// otelgin early so the server span covers the whole request chain; no-op
+	// when the global tracer provider failed to init in main.
+	r.Use(otelgin.Middleware("iag-fleet"))
 	r.Use(corsMiddleware(opts.AllowedOrigin))
 	r.Use(securityHeaders())
 	r.Use(requestTimeout(getRequestTimeout()))
