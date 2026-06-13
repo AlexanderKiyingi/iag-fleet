@@ -68,6 +68,7 @@ func (w *Workflows) Register(rg *gin.RouterGroup) {
 
 	// Safety lifecycle
 	rg.POST("/safety/:id/advance-status", auth.RequirePerm("change_safety_event"), w.safetyAdvanceStatus)
+	rg.POST("/safety/:id/create-wo", auth.RequirePerm("change_safety_event"), w.safetyCreateWO)
 }
 
 // ───────────────────────────── JMPs ─────────────────────────────
@@ -1030,6 +1031,55 @@ func (w *Workflows) safetyAdvanceStatus(c *gin.Context) {
 	}
 	w.Repo.LogBest(ctx, "status:"+body.Status, "safety_event", id, body.Note, user)
 	c.JSON(http.StatusOK, updated)
+}
+
+// safetyCreateWO raises a maintenance work order from a safety incident and
+// links the two records both ways (safety.linked_wo_id ↔ maintenance.linked_safety_id).
+// Idempotent: if the incident already has a linked WO it is returned unchanged.
+// Mirrors inspections.createDefectWO.
+func (w *Workflows) safetyCreateWO(c *gin.Context) {
+	id := c.Param("id")
+	ctx := c.Request.Context()
+	se, err := w.Repo.Safety.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if se.LinkedWoID != "" {
+		if mx, err := w.Repo.Maintenance.Get(ctx, se.LinkedWoID); err == nil {
+			c.JSON(http.StatusOK, gin.H{"maintenance": mx, "alreadyLinked": true})
+			return
+		}
+	}
+	priority := "high"
+	if se.Severity == "crit" {
+		priority = "critical"
+	}
+	mx := models.MaintenanceItem{
+		VehicleID:      se.VehicleID,
+		Date:           todayDate(),
+		Type:           "Repair",
+		Service:        "Incident follow-up: " + se.Type,
+		Status:         "scheduled",
+		Priority:       priority,
+		Workshop:       "TBD",
+		Notes:          se.Description,
+		LinkedSafetyID: se.ID,
+	}
+	created, err := w.Repo.Maintenance.Add(ctx, mx)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	user := currentUser(c, w.Repo)
+	if _, err := w.Repo.Safety.Update(ctx, id, func(s *models.SafetyEvent) {
+		s.LinkedWoID = created.ID
+	}); err != nil {
+		respondError(c, err)
+		return
+	}
+	w.Repo.LogBest(ctx, "incident-wo", "safety_event", id, created.ID, user)
+	c.JSON(http.StatusCreated, gin.H{"maintenance": created})
 }
 
 func movementDate(when string) string {

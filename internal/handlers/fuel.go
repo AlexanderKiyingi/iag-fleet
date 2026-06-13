@@ -278,7 +278,7 @@ func (f *FuelRecords) enrichFuelRecord(ctx context.Context, rec *models.FuelReco
 }
 
 type fuelAnomalyEventBody struct {
-	Event string `json:"event" binding:"required"` // investigate | resolve | dismiss | reopen
+	Event string `json:"event" binding:"required"` // investigate | confirm | resolve | dismiss | reopen
 	Note  string `json:"note,omitempty"`
 }
 
@@ -289,9 +289,9 @@ func (f *FuelRecords) anomalyEvent(c *gin.Context) {
 		return
 	}
 	switch body.Event {
-	case "investigate", "resolve", "dismiss", "reopen":
+	case "investigate", "confirm", "resolve", "dismiss", "reopen":
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "event must be investigate, resolve, dismiss, or reopen"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "event must be investigate, confirm, resolve, dismiss, or reopen"})
 		return
 	}
 	id := c.Param("id")
@@ -315,6 +315,11 @@ func (f *FuelRecords) anomalyEvent(c *gin.Context) {
 		case "investigate":
 			rec.AnomalyStatus = "investigating"
 			appendAnomalyEvent(&rec.AnomalyHistory, "investigated", user, body.Note)
+		case "confirm":
+			// Confirmed real fuel loss — keep the anomaly flagged, record the
+			// confirmation in the lifecycle history.
+			rec.AnomalyStatus = "confirmed"
+			appendAnomalyEvent(&rec.AnomalyHistory, "confirmed", user, body.Note)
 		case "resolve":
 			rec.AnomalyStatus = "resolved"
 			appendAnomalyEvent(&rec.AnomalyHistory, "resolved", user, body.Note)

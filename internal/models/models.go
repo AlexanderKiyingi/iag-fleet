@@ -260,6 +260,7 @@ type MaintenanceItem struct {
 	Status         string               `json:"status"              db:"status"`
 	Priority       string               `json:"priority"            db:"priority"`
 	Workshop       string               `json:"workshop"            db:"workshop"`
+	Mechanic       string               `json:"mechanic,omitempty"  db:"mechanic"`
 	Odo            float64              `json:"odo"                 db:"odo"`
 	NextDueKm      *float64             `json:"nextDueKm,omitempty" db:"next_due_km"`
 	Cost           float64              `json:"cost"                db:"cost"`
@@ -268,6 +269,7 @@ type MaintenanceItem struct {
 	PartsBreakdown MaintenancePartLines `json:"partsBreakdown"      db:"parts_breakdown"`
 	StatusHistory  StatusHistory        `json:"statusHistory"       db:"status_history"`
 	PmScheduleID   string               `json:"pmScheduleId,omitempty" db:"pm_schedule_id"`
+	LinkedSafetyID string               `json:"linkedSafetyId,omitempty" db:"linked_safety_id"`
 }
 
 func (m MaintenanceItem) GetID() string    { return m.ID }
@@ -280,6 +282,7 @@ type PartMovement struct {
 	Qty      float64 `json:"qty"`
 	UnitCost float64 `json:"unitCost,omitempty"`
 	Ref      string  `json:"ref,omitempty"`
+	By       string  `json:"by,omitempty"`
 	Note     string  `json:"note,omitempty"`
 }
 
@@ -357,6 +360,12 @@ type SafetyEvent struct {
 	Description   string        `json:"description"         db:"description"`
 	Action        string        `json:"action,omitempty"    db:"action"`
 	ReportedBy    string        `json:"reportedBy,omitempty" db:"reported_by"`
+	GpsLat        *float64      `json:"gpsLat,omitempty"    db:"gps_lat"`
+	GpsLng        *float64      `json:"gpsLng,omitempty"    db:"gps_lng"`
+	Injuries      *int          `json:"injuries,omitempty"  db:"injuries"`
+	Cost          *float64      `json:"cost,omitempty"      db:"cost"`
+	LinkedWoID    string        `json:"linkedWoId,omitempty" db:"linked_wo_id"`
+	Authorities   string        `json:"authorities,omitempty" db:"authorities"`
 	StatusHistory StatusHistory `json:"statusHistory"       db:"status_history"`
 }
 
