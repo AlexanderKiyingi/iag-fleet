@@ -709,6 +709,23 @@ func (w *Workflows) addDeploymentEntry(c *gin.Context) {
 		body.DeploymentStatus = "deployed"
 	}
 
+	// No double-deploy: a vehicle/driver may appear at most once in a day.
+	day, dErr := w.Repo.Deployment.Get(ctx, depID)
+	if dErr != nil {
+		respondError(c, dErr)
+		return
+	}
+	for _, e := range day.Entries {
+		if body.VehicleID != "" && e.VehicleID == body.VehicleID {
+			c.JSON(http.StatusConflict, gin.H{"error": "vehicle already has a deployment entry for this day"})
+			return
+		}
+		if body.DriverID != "" && e.DriverID == body.DriverID {
+			c.JSON(http.StatusConflict, gin.H{"error": "driver already has a deployment entry for this day"})
+			return
+		}
+	}
+
 	entry := models.DeploymentEntry{
 		ID:               generateID("DE"),
 		VehicleID:        body.VehicleID,

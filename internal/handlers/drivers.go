@@ -26,9 +26,13 @@ func NewDriverResource(repo *store.Repository) *Resource[models.Driver, *models.
 		return validateDriverDeletable(ctx, repo, id)
 	}
 	r.AfterCreate = func(ctx context.Context, item models.Driver) {
+		syncDriverVehiclePairing(ctx, repo, item)
 		_ = repo.SyncDriverComplianceDocs(ctx, item)
 	}
-	r.AfterUpdate = func(ctx context.Context, _, after models.Driver) {
+	r.AfterUpdate = func(ctx context.Context, before, after models.Driver) {
+		if before.VehicleID != after.VehicleID {
+			syncDriverVehiclePairing(ctx, repo, after)
+		}
 		_ = repo.SyncDriverComplianceDocs(ctx, after)
 	}
 	return r

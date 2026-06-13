@@ -28,9 +28,13 @@ func NewVehicleResource(repo *store.Repository, bus *events.Bus) *Resource[model
 		return validateVehicleDeletable(ctx, repo, id)
 	}
 	r.AfterCreate = func(ctx context.Context, item models.Vehicle) {
+		syncVehicleDriverPairing(ctx, repo, item)
 		emitVehicleEvent(ctx, bus, events.TypeVehicleCreated, item, "")
 	}
 	r.AfterUpdate = func(ctx context.Context, before, after models.Vehicle) {
+		if before.DriverID != after.DriverID {
+			syncVehicleDriverPairing(ctx, repo, after)
+		}
 		emitVehicleEvent(ctx, bus, events.TypeVehicleUpdated, after, before.Status)
 		if before.Status != after.Status && after.Status != "" {
 			emitVehicleEvent(ctx, bus, events.TypeVehicleStatusChanged, after, before.Status)
