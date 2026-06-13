@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -912,6 +913,7 @@ func (w *Workflows) partAdjustStock(c *gin.Context) {
 		Note:     body.Note,
 	}
 
+	var overdrawShort int // requested-minus-available on an "out" that exceeded stock
 	updated, err := w.Repo.Parts.Update(ctx, id, func(p *models.Part) {
 		switch body.Type {
 		case "in":
@@ -920,11 +922,17 @@ func (w *Workflows) partAdjustStock(c *gin.Context) {
 				p.UnitCost = body.UnitCost
 			}
 		case "out":
-			next := p.Stock - int(body.Qty)
-			if next < 0 {
-				next = 0
+			req := int(body.Qty)
+			if req > p.Stock {
+				// The workshop floor doesn't always reconcile same-day, so an
+				// over-draw still clamps to zero — but it is recorded on the
+				// ledger movement (and logged below) instead of being silent.
+				overdrawShort = req - p.Stock
+				mv.Note = fmt.Sprintf("%s [overdraw: requested %d, on-hand %d, clamped to 0]", body.Note, req, p.Stock)
+				p.Stock = 0
+			} else {
+				p.Stock = p.Stock - req
 			}
-			p.Stock = next
 		case "adjust":
 			p.Stock = int(body.Qty)
 		}
@@ -940,6 +948,9 @@ func (w *Workflows) partAdjustStock(c *gin.Context) {
 	if err != nil {
 		respondError(c, err)
 		return
+	}
+	if overdrawShort > 0 {
+		slog.Warn("part stock overdraw clamped to zero", "part", id, "short", overdrawShort, "user", user)
 	}
 	w.Repo.LogBest(ctx, "stock:"+body.Type, "part", id, body.Ref, user)
 	c.JSON(http.StatusOK, updated)
@@ -1201,6 +1212,13 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("line %d: encode: %v", i, err)})
 			return
+		}
+		// Best-effort flag: the decrement clamps at zero (workshop reality), so
+		// surface an over-draw instead of losing it silently.
+		var onHand int
+		if scanErr := tx.QueryRow(ctx, `SELECT stock FROM parts WHERE id = $1`, ln.PartID).Scan(&onHand); scanErr == nil && onHand < int(ln.Qty) {
+			slog.Warn("part stock overdraw clamped during WO completion",
+				"wo", id, "part", ln.PartID, "requested", int(ln.Qty), "onHand", onHand)
 		}
 		tag, err := tx.Exec(ctx,
 			`UPDATE parts
