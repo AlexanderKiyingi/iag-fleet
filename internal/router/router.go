@@ -143,9 +143,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	handlers.NewComplianceResource(repo).Register(api, "/compliance")
 
-	(&handlers.Resource[models.ServiceRequest, *models.ServiceRequest]{
-		Repo: repo, Collection: repo.Requests, Entity: "service_request", IDPrefix: "REQ",
-	}).Register(api, "/requests")
+	handlers.NewRequestResource(repo).Register(api, "/requests")
 
 	(&handlers.Resource[models.TaskItem, *models.TaskItem]{
 		Repo: repo, Collection: repo.Tasks, Entity: "task_item", IDPrefix: "TSK",

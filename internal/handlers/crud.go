@@ -512,7 +512,8 @@ func respondError(c *gin.Context, err error) {
 
 func respondMutationError(c *gin.Context, err error) {
 	if errors.Is(err, errDriverDoubleBooked) || errors.Is(err, errVehicleDoubleBooked) ||
-		errors.Is(err, errDriverAlreadyOnVehicle) || errors.Is(err, errVehicleNotDispatchable) {
+		errors.Is(err, errDriverAlreadyOnVehicle) || errors.Is(err, errVehicleNotDispatchable) ||
+		errors.Is(err, errToolboxIncomplete) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}

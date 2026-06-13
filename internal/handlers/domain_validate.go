@@ -25,6 +25,7 @@ var (
 	errDriverEligibility      = errors.New("driver not eligible for dispatch")
 	errVehicleNotDispatchable = errors.New("vehicle not dispatchable")
 	errInvalidFuelRecord      = errors.New("invalid fuel record")
+	errToolboxIncomplete      = errors.New("complete the toolbox talk before activating the journey")
 )
 
 func containsString(list []string, v string) bool {
@@ -244,6 +245,61 @@ func validateJMPAvailability(ctx context.Context, repo *store.Repository, driver
 		if vehicleID != "" && j.VehicleID == vehicleID {
 			return fmt.Errorf("%w (conflicts with %s)", errVehicleDoubleBooked, j.ID)
 		}
+	}
+	return nil
+}
+
+// validateRequestAssignment re-runs the dispatch guards for a service request's
+// assigned vehicle/driver, so they can't be set via a generic PATCH that bypasses
+// the /assign workflow: the vehicle must be dispatchable, the driver eligible,
+// and neither already committed to an overlapping journey in the request window.
+// The JMP derived from THIS request (sourceRequestId == req.ID) is excluded, so
+// re-validating an unchanged assignment after its journey exists is not a false
+// conflict.
+func validateRequestAssignment(ctx context.Context, repo *store.Repository, req *models.ServiceRequest) error {
+	if req.AssignedVehicleID == "" && req.AssignedDriverID == "" {
+		return nil
+	}
+	if err := validateVehicleDispatchable(ctx, repo, req.AssignedVehicleID); err != nil {
+		return err
+	}
+	if req.AssignedDriverID != "" {
+		if err := validateDriverDispatch(ctx, repo, req.AssignedDriverID); err != nil {
+			return err
+		}
+	}
+	s, e, ok := jmpDateWindow(req.StartDate, req.EndDate)
+	if !ok {
+		return nil
+	}
+	jmps, err := repo.JMPs.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, j := range jmps {
+		if !jmpIsLive(j.Status) || (req.ID != "" && j.SourceRequestID == req.ID) {
+			continue
+		}
+		js, je, ok := jmpDateWindow(j.StartDate, j.ExpectedReturn)
+		if !ok || !dateRangesOverlap(s, e, js, je) {
+			continue
+		}
+		if req.AssignedDriverID != "" && j.DriverID == req.AssignedDriverID {
+			return fmt.Errorf("%w (conflicts with %s)", errDriverDoubleBooked, j.ID)
+		}
+		if req.AssignedVehicleID != "" && j.VehicleID == req.AssignedVehicleID {
+			return fmt.Errorf("%w (conflicts with %s)", errVehicleDoubleBooked, j.ID)
+		}
+	}
+	return nil
+}
+
+// requireToolboxForActive blocks activating a journey before the pre-trip
+// toolbox talk is completed — re-securing the complete-toolbox workflow gate
+// against a generic PATCH/PUT that sets status="active" directly.
+func requireToolboxForActive(j *models.JMP) error {
+	if j.Status == "active" && !j.Toolbox.Completed {
+		return errToolboxIncomplete
 	}
 	return nil
 }

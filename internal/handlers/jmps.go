@@ -61,6 +61,10 @@ func (j *JMPs) create(c *gin.Context) {
 		item.ID = generateID(j.inner.IDPrefix)
 	}
 	j.normalize(c, &item)
+	if err := requireToolboxForActive(&item); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	if err := validateVehicleDispatchable(c.Request.Context(), j.inner.Repo, item.VehicleID); err != nil {
 		respondMutationError(c, err)
 		return
@@ -88,6 +92,10 @@ func (j *JMPs) replace(c *gin.Context) {
 	}
 	item.ID = id
 	j.normalize(c, &item)
+	if err := requireToolboxForActive(&item); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	if err := validateVehicleDispatchable(ctx, j.inner.Repo, item.VehicleID); err != nil {
 		respondMutationError(c, err)
 		return
@@ -124,6 +132,10 @@ func (j *JMPs) patch(c *gin.Context) {
 		return
 	}
 	j.normalize(c, &merged)
+	if err := requireToolboxForActive(&merged); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	if err := validateVehicleDispatchable(ctx, j.inner.Repo, merged.VehicleID); err != nil {
 		respondMutationError(c, err)
 		return
