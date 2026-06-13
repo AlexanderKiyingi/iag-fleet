@@ -61,6 +61,10 @@ func (j *JMPs) create(c *gin.Context) {
 		item.ID = generateID(j.inner.IDPrefix)
 	}
 	j.normalize(c, &item)
+	if err := validateJMPAvailability(c.Request.Context(), j.inner.Repo, item.DriverID, item.VehicleID, item.StartDate, item.ExpectedReturn, ""); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	created, err := j.inner.Collection.Add(c.Request.Context(), item)
 	if err != nil {
 		respondError(c, err)
@@ -80,6 +84,10 @@ func (j *JMPs) replace(c *gin.Context) {
 	}
 	item.ID = id
 	j.normalize(c, &item)
+	if err := validateJMPAvailability(ctx, j.inner.Repo, item.DriverID, item.VehicleID, item.StartDate, item.ExpectedReturn, id); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	updated, err := j.inner.Collection.Replace(ctx, id, item)
 	if err != nil {
 		respondError(c, err)
@@ -108,6 +116,10 @@ func (j *JMPs) patch(c *gin.Context) {
 		return
 	}
 	j.normalize(c, &merged)
+	if err := validateJMPAvailability(ctx, j.inner.Repo, merged.DriverID, merged.VehicleID, merged.StartDate, merged.ExpectedReturn, id); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	updated, err := j.inner.Collection.Replace(ctx, id, merged)
 	if err != nil {
 		respondError(c, err)

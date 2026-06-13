@@ -511,6 +511,11 @@ func respondError(c *gin.Context, err error) {
 }
 
 func respondMutationError(c *gin.Context, err error) {
+	if errors.Is(err, errDriverDoubleBooked) || errors.Is(err, errVehicleDoubleBooked) ||
+		errors.Is(err, errDriverAlreadyOnVehicle) {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
 	if errors.Is(err, errDriverNotFound) || errors.Is(err, errDriverPermitInvalid) ||
 		errors.Is(err, store.ErrNotFound) ||
 		errors.Is(err, errInvalidPMSchedule) || errors.Is(err, errInvalidMaintenanceStatus) ||

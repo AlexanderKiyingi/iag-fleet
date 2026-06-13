@@ -383,6 +383,17 @@ func (w *Workflows) assignRequest(c *gin.Context) {
 		respondMutationError(c, err)
 		return
 	}
+	// Reject assigning a driver/vehicle already committed to an overlapping
+	// journey in the request's window (early guard; JMP creation enforces it too).
+	req, err := w.Repo.Requests.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if err := validateJMPAvailability(ctx, w.Repo, body.DriverID, body.VehicleID, req.StartDate, req.EndDate, ""); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 
 	user := currentUser(c, w.Repo)
 	updated, err := w.Repo.Requests.Update(ctx, id, func(r *models.ServiceRequest) {
@@ -521,6 +532,11 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 		expectedReturn = req.StartDate
 	}
 	expectedDays := jmpplan.ComputeExpectedDays(req.StartDate, expectedReturn)
+
+	if err := validateJMPAvailability(ctx, w.Repo, req.AssignedDriverID, req.AssignedVehicleID, req.StartDate, expectedReturn, ""); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 
 	cargoDescription := req.CargoType
 	if cargoDescription == "" && req.Pax != nil {

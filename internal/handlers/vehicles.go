@@ -48,7 +48,12 @@ func validateVehicleDriver(ctx context.Context, repo *store.Repository, v *model
 	if v == nil || v.DriverID == "" {
 		return nil
 	}
-	return validateDriverDispatch(ctx, repo, v.DriverID)
+	if err := validateDriverDispatch(ctx, repo, v.DriverID); err != nil {
+		return err
+	}
+	// One driver per vehicle: the driver must not already be the assigned driver
+	// of a different vehicle.
+	return validateDriverNotOnAnotherVehicle(ctx, repo, v.DriverID, v.ID)
 }
 
 func emitVehicleEvent(ctx context.Context, bus *events.Bus, eventType string, v models.Vehicle, previousStatus string) {
