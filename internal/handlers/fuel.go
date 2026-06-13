@@ -62,6 +62,9 @@ func (f *FuelRecords) Register(rg *gin.RouterGroup, base string) {
 }
 
 func (f *FuelRecords) beforeWrite(c *gin.Context, rec *models.FuelRecord) error {
+	if err := validateFuelRecord(c.Request.Context(), f.inner.Repo, rec, rec.ID); err != nil {
+		return err
+	}
 	return f.enrichFuelRecord(c.Request.Context(), rec, nil)
 }
 
@@ -73,6 +76,10 @@ func (f *FuelRecords) create(c *gin.Context) {
 	}
 	if item.ID == "" {
 		item.ID = generateID(f.inner.IDPrefix)
+	}
+	if err := validateFuelRecord(c.Request.Context(), f.inner.Repo, &item, ""); err != nil {
+		respondMutationError(c, err)
+		return
 	}
 	if err := f.enrichFuelRecord(c.Request.Context(), &item, nil); err != nil {
 		respondError(c, err)
@@ -137,6 +144,10 @@ func (f *FuelRecords) bulkCreate(c *gin.Context) {
 		})
 		accum := append([]models.FuelRecord(nil), existingByVeh[batch[0].VehicleID]...)
 		for _, rec := range batch {
+			if err := validateFuelValues(rec); err != nil {
+				respondMutationError(c, err)
+				return
+			}
 			accum = fueldetect.UpsertHistoryRecord(accum, rec)
 			if err := f.enrichFuelRecord(ctx, rec, accum); err != nil {
 				respondError(c, err)
@@ -207,6 +218,10 @@ func (f *FuelRecords) patch(c *gin.Context) {
 	merged, err := mergeJSON(existing, patchBytes)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateFuelRecord(ctx, f.inner.Repo, &merged, id); err != nil {
+		respondMutationError(c, err)
 		return
 	}
 	if err := f.enrichFuelRecord(ctx, &merged, nil); err != nil {

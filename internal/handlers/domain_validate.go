@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -21,6 +22,9 @@ var (
 	errDriverDoubleBooked     = errors.New("driver already has an overlapping journey in this period")
 	errVehicleDoubleBooked    = errors.New("vehicle already has an overlapping journey in this period")
 	errDriverAlreadyOnVehicle = errors.New("driver is already assigned to another vehicle")
+	errDriverEligibility      = errors.New("driver not eligible for dispatch")
+	errVehicleNotDispatchable = errors.New("vehicle not dispatchable")
+	errInvalidFuelRecord      = errors.New("invalid fuel record")
 )
 
 func containsString(list []string, v string) bool {
@@ -60,8 +64,121 @@ func validateDriverDispatch(ctx context.Context, repo *store.Repository, driverI
 		}
 		return err
 	}
-	if !store.DriverPermitOK(drv, time.Now().UTC()) {
+	now := time.Now().UTC()
+	if !store.DriverPermitOK(drv, now) {
 		return errDriverPermitInvalid
+	}
+	return driverCertsOK(drv, now)
+}
+
+// driverCertsOK rejects dispatch when a required certificate has expired:
+// medical (whenever an expiry is recorded), and first-aid / defensive when the
+// driver carries them. An unset expiry for a non-required cert is allowed.
+func driverCertsOK(d models.Driver, now time.Time) error {
+	today := now.Truncate(24 * time.Hour)
+	expired := func(expiry string) bool {
+		s := strings.TrimSpace(expiry)
+		if s == "" {
+			return false
+		}
+		t, err := parseDate(s)
+		if err != nil {
+			return false
+		}
+		return t.Before(today)
+	}
+	if expired(d.MedicalExpiry) {
+		return fmt.Errorf("%w: medical certificate expired", errDriverEligibility)
+	}
+	if d.FirstAid && expired(d.FirstAidExpiry) {
+		return fmt.Errorf("%w: first-aid certificate expired", errDriverEligibility)
+	}
+	if d.Defensive && expired(d.DefensiveExpiry) {
+		return fmt.Errorf("%w: defensive-driving certificate expired", errDriverEligibility)
+	}
+	return nil
+}
+
+// vehicleDispatchable rejects vehicles that are out of service. Empty/unknown
+// status or mechStatus is allowed (don't block on missing data).
+func vehicleDispatchable(v models.Vehicle) error {
+	switch v.Status {
+	case "offline", "maintenance":
+		return fmt.Errorf("%w: status=%s", errVehicleNotDispatchable, v.Status)
+	}
+	switch v.MechStatus {
+	case "grounded", "out-of-service":
+		return fmt.Errorf("%w: mechStatus=%s", errVehicleNotDispatchable, v.MechStatus)
+	}
+	return nil
+}
+
+// validateVehicleDispatchable looks the vehicle up and checks it is dispatchable.
+// A non-existent vehicle is not rejected here (referential existence is a
+// separate concern); only a found-but-out-of-service vehicle is blocked.
+func validateVehicleDispatchable(ctx context.Context, repo *store.Repository, vehicleID string) error {
+	if vehicleID == "" {
+		return nil
+	}
+	v, err := repo.Vehicles.Get(ctx, vehicleID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return vehicleDispatchable(v)
+}
+
+// validateFuelRecord enforces fuel-record sanity: non-negative quantities, an
+// internally consistent total (total ≈ litres × unitPrice within tolerance), and
+// odometer monotonicity in date order for the vehicle. excludeID skips the record
+// being updated in place.
+// validateFuelValues is the DB-free part: non-negative quantities and an
+// internally consistent total. Used directly on the bulk path to avoid a
+// full-table read per row.
+func validateFuelValues(rec *models.FuelRecord) error {
+	if rec.Litres < 0 || rec.UnitPrice < 0 || rec.Total < 0 {
+		return fmt.Errorf("%w: litres, unitPrice and total must be non-negative", errInvalidFuelRecord)
+	}
+	if rec.Litres > 0 && rec.UnitPrice > 0 {
+		expected := rec.Litres * rec.UnitPrice
+		if math.Abs(rec.Total-expected) > expected*0.02+1 { // 2% + rounding tolerance
+			return fmt.Errorf("%w: total %.2f inconsistent with litres×unitPrice %.2f", errInvalidFuelRecord, rec.Total, expected)
+		}
+	}
+	return nil
+}
+
+func validateFuelRecord(ctx context.Context, repo *store.Repository, rec *models.FuelRecord, excludeID string) error {
+	if err := validateFuelValues(rec); err != nil {
+		return err
+	}
+	if rec.Odo <= 0 || rec.VehicleID == "" {
+		return nil
+	}
+	recDate, err := parseDate(rec.Date)
+	if err != nil {
+		return nil // unparseable date — skip the temporal check
+	}
+	all, err := repo.Fuel.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, o := range all {
+		if o.ID == excludeID || o.VehicleID != rec.VehicleID || o.Odo <= 0 {
+			continue
+		}
+		od, e := parseDate(o.Date)
+		if e != nil {
+			continue
+		}
+		if od.Before(recDate) && o.Odo > rec.Odo {
+			return fmt.Errorf("%w: odo %.0f is below an earlier reading %.0f on %s", errInvalidFuelRecord, rec.Odo, o.Odo, o.Date)
+		}
+		if od.After(recDate) && o.Odo < rec.Odo {
+			return fmt.Errorf("%w: odo %.0f is above a later reading %.0f on %s", errInvalidFuelRecord, rec.Odo, o.Odo, o.Date)
+		}
 	}
 	return nil
 }

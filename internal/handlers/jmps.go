@@ -61,6 +61,10 @@ func (j *JMPs) create(c *gin.Context) {
 		item.ID = generateID(j.inner.IDPrefix)
 	}
 	j.normalize(c, &item)
+	if err := validateVehicleDispatchable(c.Request.Context(), j.inner.Repo, item.VehicleID); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	if err := validateJMPAvailability(c.Request.Context(), j.inner.Repo, item.DriverID, item.VehicleID, item.StartDate, item.ExpectedReturn, ""); err != nil {
 		respondMutationError(c, err)
 		return
@@ -84,6 +88,10 @@ func (j *JMPs) replace(c *gin.Context) {
 	}
 	item.ID = id
 	j.normalize(c, &item)
+	if err := validateVehicleDispatchable(ctx, j.inner.Repo, item.VehicleID); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	if err := validateJMPAvailability(ctx, j.inner.Repo, item.DriverID, item.VehicleID, item.StartDate, item.ExpectedReturn, id); err != nil {
 		respondMutationError(c, err)
 		return
@@ -116,6 +124,10 @@ func (j *JMPs) patch(c *gin.Context) {
 		return
 	}
 	j.normalize(c, &merged)
+	if err := validateVehicleDispatchable(ctx, j.inner.Repo, merged.VehicleID); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	if err := validateJMPAvailability(ctx, j.inner.Repo, merged.DriverID, merged.VehicleID, merged.StartDate, merged.ExpectedReturn, id); err != nil {
 		respondMutationError(c, err)
 		return

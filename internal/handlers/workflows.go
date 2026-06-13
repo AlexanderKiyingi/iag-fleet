@@ -366,8 +366,8 @@ func (w *Workflows) assignRequest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "vehicle not found"})
 		return
 	}
-	if veh.Status == "offline" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "vehicle is offline"})
+	if err := vehicleDispatchable(veh); err != nil {
+		respondMutationError(c, err)
 		return
 	}
 	drv, err := w.Repo.Drivers.Get(ctx, body.DriverID)
@@ -533,6 +533,10 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 	}
 	expectedDays := jmpplan.ComputeExpectedDays(req.StartDate, expectedReturn)
 
+	if err := validateVehicleDispatchable(ctx, w.Repo, req.AssignedVehicleID); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	if err := validateJMPAvailability(ctx, w.Repo, req.AssignedDriverID, req.AssignedVehicleID, req.StartDate, expectedReturn, ""); err != nil {
 		respondMutationError(c, err)
 		return
@@ -1143,6 +1147,12 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 		id,
 	).Scan(&status, &breakdownRaw, &pmScheduleID, &vehicleID, &odo, &woDate); err != nil {
 		respondError(c, err)
+		return
+	}
+	// Idempotency: completing an already-completed WO would decrement part stock
+	// a second time. Reject instead.
+	if status == "completed" {
+		c.JSON(http.StatusConflict, gin.H{"error": "maintenance work order already completed"})
 		return
 	}
 
