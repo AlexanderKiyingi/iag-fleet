@@ -24,6 +24,9 @@ func NewVehicleResource(repo *store.Repository, bus *events.Bus) *Resource[model
 	r.BeforeUpdate = func(c *gin.Context, item *models.Vehicle) error {
 		return validateVehicleDriver(c.Request.Context(), repo, item)
 	}
+	r.BeforeDelete = func(ctx context.Context, id string) error {
+		return validateVehicleDeletable(ctx, repo, id)
+	}
 	r.AfterCreate = func(ctx context.Context, item models.Vehicle) {
 		emitVehicleEvent(ctx, bus, events.TypeVehicleCreated, item, "")
 	}

@@ -22,6 +22,9 @@ func NewDriverResource(repo *store.Repository) *Resource[models.Driver, *models.
 	r.BeforeUpdate = func(c *gin.Context, item *models.Driver) error {
 		return validateDriver(item)
 	}
+	r.BeforeDelete = func(ctx context.Context, id string) error {
+		return validateDriverDeletable(ctx, repo, id)
+	}
 	r.AfterCreate = func(ctx context.Context, item models.Driver) {
 		_ = repo.SyncDriverComplianceDocs(ctx, item)
 	}

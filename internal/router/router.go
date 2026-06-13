@@ -129,9 +129,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 		Repo: repo, Collection: repo.Parts, Entity: "part", IDPrefix: "PRT",
 	}).Register(api, "/parts")
 
-	(&handlers.Resource[models.Tyre, *models.Tyre]{
-		Repo: repo, Collection: repo.Tyres, Entity: "tyre", IDPrefix: "TYR",
-	}).Register(api, "/tyres")
+	handlers.NewTyreResource(repo).Register(api, "/tyres")
 
 	(&handlers.Resource[models.Trip, *models.Trip]{
 		Repo: repo, Collection: repo.Trips, Entity: "trip", IDPrefix: "TRP",

@@ -40,6 +40,7 @@ type Resource[T any, PT store.IdentifiablePtr[T]] struct {
 	// Optional hooks for entity-specific validation and side effects.
 	BeforeCreate func(c *gin.Context, item *T) error
 	BeforeUpdate func(c *gin.Context, item *T) error
+	BeforeDelete func(ctx context.Context, id string) error
 	AfterCreate  func(ctx context.Context, item T)
 	AfterUpdate  func(ctx context.Context, before, after T)
 	AfterDelete  func(ctx context.Context, id string)
@@ -460,6 +461,12 @@ func (r *Resource[T, PT]) patch(c *gin.Context) {
 
 func (r *Resource[T, PT]) remove(c *gin.Context) {
 	id := c.Param("id")
+	if r.BeforeDelete != nil {
+		if err := r.BeforeDelete(c.Request.Context(), id); err != nil {
+			respondMutationError(c, err)
+			return
+		}
+	}
 	if err := r.Collection.Delete(c.Request.Context(), id); err != nil {
 		respondError(c, err)
 		return
@@ -513,11 +520,13 @@ func respondError(c *gin.Context, err error) {
 func respondMutationError(c *gin.Context, err error) {
 	if errors.Is(err, errDriverDoubleBooked) || errors.Is(err, errVehicleDoubleBooked) ||
 		errors.Is(err, errDriverAlreadyOnVehicle) || errors.Is(err, errVehicleNotDispatchable) ||
-		errors.Is(err, errToolboxIncomplete) {
+		errors.Is(err, errToolboxIncomplete) || errors.Is(err, errVehicleInUse) ||
+		errors.Is(err, errDriverInUse) || errors.Is(err, errTyrePositionTaken) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 	if errors.Is(err, errDriverEligibility) || errors.Is(err, errInvalidFuelRecord) ||
+		errors.Is(err, errVehicleNotFound) ||
 		errors.Is(err, errDriverNotFound) || errors.Is(err, errDriverPermitInvalid) ||
 		errors.Is(err, store.ErrNotFound) ||
 		errors.Is(err, errInvalidPMSchedule) || errors.Is(err, errInvalidMaintenanceStatus) ||

@@ -65,7 +65,7 @@ func (j *JMPs) create(c *gin.Context) {
 		respondMutationError(c, err)
 		return
 	}
-	if err := validateVehicleDispatchable(c.Request.Context(), j.inner.Repo, item.VehicleID); err != nil {
+	if err := validateJMPRefs(c.Request.Context(), j.inner.Repo, item.DriverID, item.VehicleID); err != nil {
 		respondMutationError(c, err)
 		return
 	}
@@ -96,7 +96,7 @@ func (j *JMPs) replace(c *gin.Context) {
 		respondMutationError(c, err)
 		return
 	}
-	if err := validateVehicleDispatchable(ctx, j.inner.Repo, item.VehicleID); err != nil {
+	if err := validateJMPRefs(ctx, j.inner.Repo, item.DriverID, item.VehicleID); err != nil {
 		respondMutationError(c, err)
 		return
 	}
@@ -136,7 +136,7 @@ func (j *JMPs) patch(c *gin.Context) {
 		respondMutationError(c, err)
 		return
 	}
-	if err := validateVehicleDispatchable(ctx, j.inner.Repo, merged.VehicleID); err != nil {
+	if err := validateJMPRefs(ctx, j.inner.Repo, merged.DriverID, merged.VehicleID); err != nil {
 		respondMutationError(c, err)
 		return
 	}

@@ -26,6 +26,10 @@ var (
 	errVehicleNotDispatchable = errors.New("vehicle not dispatchable")
 	errInvalidFuelRecord      = errors.New("invalid fuel record")
 	errToolboxIncomplete      = errors.New("complete the toolbox talk before activating the journey")
+	errVehicleNotFound        = errors.New("vehicle not found")
+	errVehicleInUse           = errors.New("vehicle is referenced by a live journey")
+	errDriverInUse            = errors.New("driver is referenced by a live journey or vehicle")
+	errTyrePositionTaken      = errors.New("a tyre is already mounted at this position")
 )
 
 func containsString(list []string, v string) bool {
@@ -153,6 +157,9 @@ func validateFuelValues(rec *models.FuelRecord) error {
 
 func validateFuelRecord(ctx context.Context, repo *store.Repository, rec *models.FuelRecord, excludeID string) error {
 	if err := validateFuelValues(rec); err != nil {
+		return err
+	}
+	if err := validateVehicleExists(ctx, repo, rec.VehicleID); err != nil {
 		return err
 	}
 	if rec.Odo <= 0 || rec.VehicleID == "" {
@@ -292,6 +299,130 @@ func validateRequestAssignment(ctx context.Context, repo *store.Repository, req 
 		}
 	}
 	return nil
+}
+
+// validateVehicleExists / validateDriverExists enforce referential integrity on
+// assignment: a record may not reference a vehicle/driver that doesn't exist.
+// (The DB has no FK on these columns.)
+func validateVehicleExists(ctx context.Context, repo *store.Repository, vehicleID string) error {
+	if vehicleID == "" {
+		return nil
+	}
+	if _, err := repo.Vehicles.Get(ctx, vehicleID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errVehicleNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+func validateDriverExists(ctx context.Context, repo *store.Repository, driverID string) error {
+	if driverID == "" {
+		return nil
+	}
+	if _, err := repo.Drivers.Get(ctx, driverID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errDriverNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// liveJMPReference returns the id of a live JMP that references the given
+// vehicle or driver, if any.
+func liveJMPReference(ctx context.Context, repo *store.Repository, vehicleID, driverID string) (string, bool, error) {
+	jmps, err := repo.JMPs.List(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	for _, j := range jmps {
+		if !jmpIsLive(j.Status) {
+			continue
+		}
+		if vehicleID != "" && j.VehicleID == vehicleID {
+			return j.ID, true, nil
+		}
+		if driverID != "" && j.DriverID == driverID {
+			return j.ID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// validateVehicleDeletable blocks deleting a vehicle still referenced by a live
+// journey (which would dangle the reference).
+func validateVehicleDeletable(ctx context.Context, repo *store.Repository, vehicleID string) error {
+	jid, ref, err := liveJMPReference(ctx, repo, vehicleID, "")
+	if err != nil {
+		return err
+	}
+	if ref {
+		return fmt.Errorf("%w (%s)", errVehicleInUse, jid)
+	}
+	return nil
+}
+
+// validateDriverDeletable blocks deleting a driver still referenced by a live
+// journey or assigned as a vehicle's driver.
+func validateDriverDeletable(ctx context.Context, repo *store.Repository, driverID string) error {
+	jid, ref, err := liveJMPReference(ctx, repo, "", driverID)
+	if err != nil {
+		return err
+	}
+	if ref {
+		return fmt.Errorf("%w (live journey %s)", errDriverInUse, jid)
+	}
+	vehicles, err := repo.Vehicles.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, v := range vehicles {
+		if v.DriverID == driverID {
+			return fmt.Errorf("%w (vehicle %s)", errDriverInUse, v.ID)
+		}
+	}
+	return nil
+}
+
+func isRetiredTyre(status string) bool {
+	switch status {
+	case "replaced", "retired", "scrapped", "removed":
+		return true
+	}
+	return false
+}
+
+// validateTyrePosition enforces one current tyre per (vehicle, position):
+// retired tyres are kept for history and don't block a fresh mount.
+func validateTyrePosition(ctx context.Context, repo *store.Repository, t *models.Tyre) error {
+	if t.VehicleID == "" || t.Position == "" || isRetiredTyre(t.Status) {
+		return nil
+	}
+	all, err := repo.Tyres.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, o := range all {
+		if o.ID == t.ID || o.VehicleID != t.VehicleID || o.Position != t.Position || isRetiredTyre(o.Status) {
+			continue
+		}
+		return fmt.Errorf("%w: %s %s (tyre %s)", errTyrePositionTaken, t.VehicleID, t.Position, o.ID)
+	}
+	return nil
+}
+
+// validateJMPRefs checks a journey's driver/vehicle exist and the vehicle is
+// dispatchable.
+func validateJMPRefs(ctx context.Context, repo *store.Repository, driverID, vehicleID string) error {
+	if err := validateDriverExists(ctx, repo, driverID); err != nil {
+		return err
+	}
+	if err := validateVehicleExists(ctx, repo, vehicleID); err != nil {
+		return err
+	}
+	return validateVehicleDispatchable(ctx, repo, vehicleID)
 }
 
 // requireToolboxForActive blocks activating a journey before the pre-trip
