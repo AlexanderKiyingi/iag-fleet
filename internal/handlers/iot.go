@@ -821,8 +821,13 @@ func parseTrackAfter(v string) (*time.Time, error) {
 }
 
 func respondIotError(c *gin.Context, err error) {
-	if isUniqueViolation(err) {
-		c.JSON(http.StatusConflict, gin.H{"error": "serial already registered"})
+	if name, ok := uniqueConstraint(err); ok {
+		switch name {
+		case "iot_devices_one_active_per_vehicle":
+			c.JSON(http.StatusConflict, gin.H{"error": "vehicle already has an active device; deactivate or reassign it first"})
+		default:
+			c.JSON(http.StatusConflict, gin.H{"error": "serial already registered"})
+		}
 		return
 	}
 	switch {

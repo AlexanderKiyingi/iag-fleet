@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,19 @@ func TestRespondIotError_duplicateSerial409(t *testing.T) {
 	respondIotError(c, &pgconn.PgError{Code: "23505", ConstraintName: "iot_devices_serial_key"})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status %d, want 409", w.Code)
+	}
+}
+
+func TestRespondIotError_duplicateActiveDevice409(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	respondIotError(c, &pgconn.PgError{Code: "23505", ConstraintName: "iot_devices_one_active_per_vehicle"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "active device") {
+		t.Fatalf("body %q, want vehicle-already-bound message", w.Body.String())
 	}
 }
 
