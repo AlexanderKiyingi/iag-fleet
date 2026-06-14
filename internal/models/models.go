@@ -83,6 +83,9 @@ type Vehicle struct {
 	MechStatus         string   `json:"mechStatus"               db:"mech_status"`
 	Alert              string   `json:"alert,omitempty"          db:"alert"`
 	TankCapacityLitres *int     `json:"tankCapacityLitres,omitempty" db:"tank_capacity_litres"`
+	// CostCenter is the finance bucket warehouse stock issues raised on this
+	// vehicle's maintenance WOs are costed to. Optional.
+	CostCenter string `json:"costCenter,omitempty" db:"cost_center"`
 }
 
 func (v Vehicle) GetID() string    { return v.ID }
@@ -305,6 +308,12 @@ type Part struct {
 	LastConsumed string        `json:"lastConsumed,omitempty" db:"last_consumed" dbcast:"date"`
 	Notes        string        `json:"notes,omitempty"    db:"notes"`
 	Movements    PartMovements `json:"movements"          db:"movements"`
+	// WarehouseItemID maps this part to its iag-warehouse wh_items UUID under
+	// the stock-delegation model (empty until reconciled). WarehouseSyncedAt is
+	// the last time Stock/Movements were refreshed from a warehouse event;
+	// empty means this part is still showing legacy local stock.
+	WarehouseItemID   string `json:"warehouseItemId,omitempty"   db:"warehouse_item_id"`
+	WarehouseSyncedAt string `json:"warehouseSyncedAt,omitempty" db:"warehouse_synced_at" dbcast:"timestamptz"`
 }
 
 func (p Part) GetID() string    { return p.ID }
@@ -542,21 +551,21 @@ type InspectionDefect struct {
 type InspectionDefects []InspectionDefect
 
 type VehicleInspection struct {
-	ID            string              `json:"id"                      db:"id"`
-	TemplateID    string              `json:"templateId"              db:"template_id"`
-	VehicleID     string              `json:"vehicleId"               db:"vehicle_id"`
-	DriverID      string              `json:"driverId,omitempty"      db:"driver_id"`
-	Kind          string              `json:"kind"                    db:"kind"`
-	Status        string              `json:"status"                  db:"status"`
-	Odo           float64             `json:"odo"                     db:"odo"`
-	Location      string              `json:"location,omitempty"      db:"location"`
-	Results       InspectionResults   `json:"results"                 db:"results"`
-	Defects       InspectionDefects   `json:"defects"                 db:"defects"`
-	Signature     string              `json:"signature,omitempty"     db:"signature"`
-	SubmittedAt   string              `json:"submittedAt,omitempty"   db:"submitted_at" dbcast:"timestamptz"`
-	SubmittedBy   string              `json:"submittedBy,omitempty"   db:"submitted_by"`
-	MaintenanceID string              `json:"maintenanceId,omitempty" db:"maintenance_id"`
-	Notes         string              `json:"notes,omitempty"         db:"notes"`
+	ID            string            `json:"id"                      db:"id"`
+	TemplateID    string            `json:"templateId"              db:"template_id"`
+	VehicleID     string            `json:"vehicleId"               db:"vehicle_id"`
+	DriverID      string            `json:"driverId,omitempty"      db:"driver_id"`
+	Kind          string            `json:"kind"                    db:"kind"`
+	Status        string            `json:"status"                  db:"status"`
+	Odo           float64           `json:"odo"                     db:"odo"`
+	Location      string            `json:"location,omitempty"      db:"location"`
+	Results       InspectionResults `json:"results"                 db:"results"`
+	Defects       InspectionDefects `json:"defects"                 db:"defects"`
+	Signature     string            `json:"signature,omitempty"     db:"signature"`
+	SubmittedAt   string            `json:"submittedAt,omitempty"   db:"submitted_at" dbcast:"timestamptz"`
+	SubmittedBy   string            `json:"submittedBy,omitempty"   db:"submitted_by"`
+	MaintenanceID string            `json:"maintenanceId,omitempty" db:"maintenance_id"`
+	Notes         string            `json:"notes,omitempty"         db:"notes"`
 }
 
 func (v VehicleInspection) GetID() string    { return v.ID }

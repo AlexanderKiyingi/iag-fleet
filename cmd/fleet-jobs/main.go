@@ -16,12 +16,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/iag/fleet-iot/iot"
+	"github.com/iag/fleet-tool/backend/internal/config"
 	"github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/jobs"
 	"github.com/iag/fleet-tool/backend/internal/store"
+	"github.com/iag/fleet-tool/backend/internal/warehouseclient"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -34,6 +36,7 @@ func main() {
 	doEvaluatePM := flag.Bool("evaluate-pm", false, "create work orders for due PM schedules")
 	doMarkMxOverdue := flag.Bool("mark-mx-overdue", false, "mark scheduled work orders past date as overdue")
 	doRecomputeCompliance := flag.Bool("recompute-compliance", false, "derive compliance status from expiry dates")
+	doReconcileWh := flag.Bool("reconcile-warehouse-stock", false, "refresh parts.stock from iag-warehouse on-hand (delegation projection backstop)")
 	pmWithinDays := flag.Int("pm-within-days", jobs.DefaultPMWithinDays, "PM evaluate/due lookahead days")
 	pmWithinKm := flag.Float64("pm-within-km", jobs.DefaultPMWithinKm, "PM evaluate/due odometer lookahead km")
 	linkDays := flag.Int("link-days", 90, "lookback days for --link-fuel")
@@ -55,9 +58,10 @@ func main() {
 	runEvaluatePM := *doEvaluatePM
 	runMarkMxOverdue := *doMarkMxOverdue
 	runRecomputeCompliance := *doRecomputeCompliance
+	runReconcileWh := *doReconcileWh
 	if !runAgg && !runPurge && !runLink && !runStale && !runDetect &&
-		!runEvaluatePM && !runMarkMxOverdue && !runRecomputeCompliance {
-		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, --purge, --mark-stale, --detect-trips, --evaluate-pm, --mark-mx-overdue, --recompute-compliance, and/or --link-fuel")
+		!runEvaluatePM && !runMarkMxOverdue && !runRecomputeCompliance && !runReconcileWh {
+		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, --purge, --mark-stale, --detect-trips, --evaluate-pm, --mark-mx-overdue, --recompute-compliance, --reconcile-warehouse-stock, and/or --link-fuel")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -186,5 +190,29 @@ func main() {
 		}
 		log.Printf("fleet-jobs evaluate-pm: checked %d, created %d WOs, skipped %d",
 			res.Checked, res.Created, res.Skipped)
+	}
+	if runReconcileWh {
+		cfg, err := config.Load()
+		if err != nil {
+			log.Fatalf("reconcile-warehouse-stock: config: %v", err)
+		}
+		if !cfg.WarehouseDelegationEnabled {
+			log.Fatal("reconcile-warehouse-stock: set WAREHOUSE_DELEGATION_ENABLED=true and the warehouse credentials")
+		}
+		wh := warehouseclient.New(warehouseclient.Options{
+			BaseURL:      cfg.WarehouseBaseURL,
+			Audience:     cfg.WarehouseAudience,
+			TokenURL:     cfg.AuthTokenURL,
+			ClientID:     cfg.ServiceClientID,
+			ClientSecret: cfg.ServiceClientSecret,
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		res, err := jobs.ReconcileWarehouseStock(ctx, operationalPool, wh)
+		cancel()
+		if err != nil {
+			log.Fatalf("reconcile-warehouse-stock: %v", err)
+		}
+		log.Printf("fleet-jobs reconcile-warehouse-stock: checked %d, updated %d, errors %d",
+			res.Checked, res.Updated, res.Errors)
 	}
 }

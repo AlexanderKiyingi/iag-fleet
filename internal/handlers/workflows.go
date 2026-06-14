@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -17,6 +18,8 @@ import (
 	jmpplan "github.com/iag/fleet-tool/backend/internal/jmp"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
+	"github.com/iag/fleet-tool/backend/internal/warehouseclient"
+	"github.com/jackc/pgx/v5"
 )
 
 // Workflows owns endpoints that encode multi-field or cross-entity state
@@ -26,6 +29,9 @@ type Workflows struct {
 	Events         *events.Bus
 	RoutingOSRMURL string
 	Config         config.Config
+	// Warehouse is the outbound client to iag-warehouse. Non-nil only when
+	// stock delegation is enabled; nil otherwise (fleet keeps local stock).
+	Warehouse *warehouseclient.Client
 }
 
 func (w *Workflows) Register(rg *gin.RouterGroup) {
@@ -1192,48 +1198,61 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 		}
 	}
 
-	// Decrement stock + append "out" movement per line. We touch each
-	// part via direct SQL (skipping Collection.Update) so we can keep
-	// every UPDATE inside the same tx as the WO transition.
-	for i, ln := range lines {
-		if ln.PartID == "" {
-			continue
-		}
-		mv := models.PartMovement{
-			ID:       generateID("MV"),
-			Date:     now,
-			Type:     "out",
-			Qty:      ln.Qty,
-			UnitCost: ln.UnitCost,
-			Ref:      id,
-			Note:     ln.Note,
-		}
-		mvJSON, err := json.Marshal(mv)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("line %d: encode: %v", i, err)})
+	// Stock consumption. Under warehouse delegation, iag-warehouse is the
+	// system-of-record for spare-parts stock: we post a single issue there
+	// (idempotent per WO) and DO NOT touch parts.stock locally — the stock
+	// projection is updated asynchronously by the warehouse-event consumer.
+	// Without delegation we keep the legacy behavior: decrement parts.stock
+	// and append an "out" movement per line inside this same tx.
+	if w.Config.WarehouseDelegationEnabled && w.Warehouse != nil {
+		if err := w.issuePartsToWarehouse(ctx, c, tx, id, vehicleID, lines); err != nil {
+			// issuePartsToWarehouse has already written the HTTP error.
 			return
 		}
-		// Best-effort flag: the decrement clamps at zero (workshop reality), so
-		// surface an over-draw instead of losing it silently.
-		var onHand int
-		if scanErr := tx.QueryRow(ctx, `SELECT stock FROM parts WHERE id = $1`, ln.PartID).Scan(&onHand); scanErr == nil && onHand < int(ln.Qty) {
-			slog.Warn("part stock overdraw clamped during WO completion",
-				"wo", id, "part", ln.PartID, "requested", int(ln.Qty), "onHand", onHand)
-		}
-		tag, err := tx.Exec(ctx,
-			`UPDATE parts
-			    SET stock = GREATEST(stock - $2, 0),
-			        movements = movements || $3::jsonb
-			  WHERE id = $1`,
-			ln.PartID, int(ln.Qty), mvJSON,
-		)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("line %d: %v", i, err)})
-			return
-		}
-		if tag.RowsAffected() == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("line %d: part %q not found", i, ln.PartID)})
-			return
+	} else {
+		// Decrement stock + append "out" movement per line. We touch each
+		// part via direct SQL (skipping Collection.Update) so we can keep
+		// every UPDATE inside the same tx as the WO transition.
+		for i, ln := range lines {
+			if ln.PartID == "" {
+				continue
+			}
+			mv := models.PartMovement{
+				ID:       generateID("MV"),
+				Date:     now,
+				Type:     "out",
+				Qty:      ln.Qty,
+				UnitCost: ln.UnitCost,
+				Ref:      id,
+				Note:     ln.Note,
+			}
+			mvJSON, err := json.Marshal(mv)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("line %d: encode: %v", i, err)})
+				return
+			}
+			// Best-effort flag: the decrement clamps at zero (workshop reality), so
+			// surface an over-draw instead of losing it silently.
+			var onHand int
+			if scanErr := tx.QueryRow(ctx, `SELECT stock FROM parts WHERE id = $1`, ln.PartID).Scan(&onHand); scanErr == nil && onHand < int(ln.Qty) {
+				slog.Warn("part stock overdraw clamped during WO completion",
+					"wo", id, "part", ln.PartID, "requested", int(ln.Qty), "onHand", onHand)
+			}
+			tag, err := tx.Exec(ctx,
+				`UPDATE parts
+				    SET stock = GREATEST(stock - $2, 0),
+				        movements = movements || $3::jsonb
+				  WHERE id = $1`,
+				ln.PartID, int(ln.Qty), mvJSON,
+			)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("line %d: %v", i, err)})
+				return
+			}
+			if tag.RowsAffected() == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("line %d: part %q not found", i, ln.PartID)})
+				return
+			}
 		}
 	}
 
@@ -1284,6 +1303,98 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 		"pmScheduleId":  pmScheduleID,
 	}, id)
 	c.JSON(http.StatusOK, updated)
+}
+
+// issuePartsToWarehouse posts the WO's parts breakdown to iag-warehouse as a
+// single department issue (the system-of-record for stock under delegation).
+// It is idempotent per work order via the Idempotency-Key, so a retried
+// completion won't double-issue. Item resolution prefers the part's stored
+// warehouse_item_id and falls back to a live SKU lookup. On failure it honors
+// WarehouseIssueFailOpen: fail-open logs and lets the WO complete; fail-closed
+// writes an HTTP error and returns it (non-nil) so the caller aborts the tx.
+//
+// Note: this runs while the maintenance_items row is held FOR UPDATE. The HTTP
+// call is bounded (10s client timeout) and WO completion is a low-frequency
+// operator action, so holding the row lock across the call is acceptable.
+func (w *Workflows) issuePartsToWarehouse(ctx context.Context, c *gin.Context, tx pgx.Tx, woID, vehicleID string, lines models.MaintenancePartLines) error {
+	var issueLines []warehouseclient.IssueLine
+	for i, ln := range lines {
+		if ln.PartID == "" || ln.Qty <= 0 {
+			continue
+		}
+		var sku, whItemID string
+		err := tx.QueryRow(ctx,
+			`SELECT COALESCE(sku,''), COALESCE(warehouse_item_id,'') FROM parts WHERE id = $1`,
+			ln.PartID,
+		).Scan(&sku, &whItemID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("line %d: part %q not found", i, ln.PartID)})
+				return err
+			}
+			respondError(c, err)
+			return err
+		}
+
+		itemID := whItemID
+		if itemID == "" {
+			if sku == "" {
+				if w.Config.WarehouseIssueFailOpen {
+					slog.Warn("part has no SKU; skipping warehouse issue line (fail-open)", "wo", woID, "part", ln.PartID)
+					continue
+				}
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": fmt.Sprintf("line %d: part %q has no SKU to map to a warehouse item", i, ln.PartID)})
+				return fmt.Errorf("part %s has no sku", ln.PartID)
+			}
+			item, lerr := w.Warehouse.GetItemBySKU(ctx, sku)
+			if lerr != nil {
+				if w.Config.WarehouseIssueFailOpen {
+					slog.Warn("warehouse item lookup failed; skipping line (fail-open)", "wo", woID, "part", ln.PartID, "sku", sku, "err", lerr)
+					continue
+				}
+				if errors.Is(lerr, warehouseclient.ErrItemNotFound) {
+					c.JSON(http.StatusUnprocessableEntity, gin.H{"error": fmt.Sprintf("line %d: sku %q has no matching warehouse item", i, sku)})
+					return lerr
+				}
+				c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("line %d: warehouse lookup failed: %v", i, lerr)})
+				return lerr
+			}
+			itemID = item.ID
+		}
+		issueLines = append(issueLines, warehouseclient.IssueLine{ItemID: itemID, Qty: ln.Qty})
+	}
+
+	if len(issueLines) == 0 {
+		return nil
+	}
+
+	// Cost the issue to the vehicle's cost center when set, so finance can split
+	// spare-parts spend per vehicle rather than against a single department.
+	var costCenter string
+	if vehicleID != "" {
+		_ = tx.QueryRow(ctx, `SELECT COALESCE(cost_center,'') FROM vehicles WHERE id = $1`, vehicleID).Scan(&costCenter)
+	}
+
+	if _, err := w.Warehouse.IssueForDepartment(ctx, warehouseclient.IssueRequest{
+		Department:     w.Config.WarehouseIssueDepartment,
+		CostCenter:     costCenter,
+		WorkOrderRef:   woID,
+		Notes:          "fleet maintenance WO " + woID,
+		Lines:          issueLines,
+		IdempotencyKey: "fleet-wo-" + woID,
+	}); err != nil {
+		if w.Config.WarehouseIssueFailOpen {
+			slog.Warn("warehouse issue failed; completing WO anyway (fail-open)", "wo", woID, "err", err)
+			return nil
+		}
+		if errors.Is(err, warehouseclient.ErrInsufficientStock) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "warehouse: insufficient stock for one or more parts on this work order"})
+			return err
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "warehouse issue failed: " + err.Error()})
+		return err
+	}
+	return nil
 }
 
 func (w *Workflows) emitFleet(ctx context.Context, eventType string, fields map[string]string, key string) {

@@ -594,7 +594,19 @@ func (c *Collection[T, PT]) bindArgs(item T, skipID bool) ([]any, error) {
 		if skipID && ci.name == "id" {
 			continue
 		}
-		args = append(args, v.Field(ci.fieldIdx).Interface())
+		val := v.Field(ci.fieldIdx).Interface()
+		// The model carries DATE/TIMESTAMPTZ columns as plain JSON-friendly
+		// strings, but Postgres can't parse "" as a temporal value. Translate
+		// the empty zero value to NULL on write so optional date/timestamp
+		// fields (last_received, last_consumed, warehouse_synced_at, …) insert
+		// cleanly instead of erroring with "invalid input syntax".
+		if ci.isString && (ci.dbCast == "date" || ci.dbCast == "timestamptz") {
+			if s, ok := val.(string); ok && s == "" {
+				args = append(args, nil)
+				continue
+			}
+		}
+		args = append(args, val)
 	}
 	return args, nil
 }

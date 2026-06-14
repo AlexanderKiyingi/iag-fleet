@@ -10,22 +10,33 @@ import (
 
 // Config holds runtime settings for the fleet API.
 type Config struct {
-	Addr                  string
-	Environment           string
-	DatabaseURL           string
-	TelemetryDatabaseURL  string
-	JWTIssuer             string
-	JWKSURL               string
-	Audience              string // aud claim the service requires on inbound tokens
-	GatewayAPIPrefix      string
-	CORSOrigin            string
-	PublicAPIURL          string
-	AutoMigrate           bool
-	KafkaBrokers          []string
-	EventBusEnabled       bool
-	ServiceClientID       string
-	ServiceClientSecret   string
-	AuthTokenURL          string
+	Addr                 string
+	Environment          string
+	DatabaseURL          string
+	TelemetryDatabaseURL string
+	JWTIssuer            string
+	JWKSURL              string
+	Audience             string // aud claim the service requires on inbound tokens
+	GatewayAPIPrefix     string
+	CORSOrigin           string
+	PublicAPIURL         string
+	AutoMigrate          bool
+	KafkaBrokers         []string
+	EventBusEnabled      bool
+	ServiceClientID      string
+	ServiceClientSecret  string
+	AuthTokenURL         string
+
+	// Warehouse ("stores") delegation. When WarehouseDelegationEnabled is
+	// true, fleet stops decrementing its local parts.stock on maintenance WO
+	// completion and instead posts a stock issue to iag-warehouse, the
+	// system-of-record for spare-parts stock. The other fields configure how
+	// fleet reaches and labels those issues.
+	WarehouseBaseURL           string
+	WarehouseAudience          string
+	WarehouseDelegationEnabled bool
+	WarehouseIssueDepartment   string
+	WarehouseIssueFailOpen     bool
 }
 
 // Load reads configuration from env. Hard cutover: no AUTH_MODE, no
@@ -50,6 +61,12 @@ func Load() (Config, error) {
 		ServiceClientID:      strings.TrimSpace(envOr("SERVICE_CLIENT_ID", "iag-fleet")),
 		ServiceClientSecret:  strings.TrimSpace(os.Getenv("SERVICE_CLIENT_SECRET")),
 		AuthTokenURL:         strings.TrimSpace(envOr("AUTH_TOKEN_URL", strings.TrimRight(issuer, "/")+"/oauth/token")),
+
+		WarehouseBaseURL:           strings.TrimRight(strings.TrimSpace(envOr("WAREHOUSE_BASE_URL", "http://localhost:4005")), "/"),
+		WarehouseAudience:          strings.TrimSpace(envOr("WAREHOUSE_AUDIENCE", "iag.warehouse")),
+		WarehouseDelegationEnabled: strings.EqualFold(os.Getenv("WAREHOUSE_DELEGATION_ENABLED"), "true"),
+		WarehouseIssueDepartment:   strings.TrimSpace(envOr("WAREHOUSE_ISSUE_DEPARTMENT", "fleet-maintenance")),
+		WarehouseIssueFailOpen:     strings.EqualFold(os.Getenv("WAREHOUSE_ISSUE_FAIL_OPEN"), "true"),
 	}
 	if brokers := strings.TrimSpace(os.Getenv("KAFKA_BROKERS")); brokers != "" {
 		for _, b := range strings.Split(brokers, ",") {
@@ -74,6 +91,14 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if c.WarehouseDelegationEnabled {
+		if c.WarehouseBaseURL == "" {
+			return fmt.Errorf("WAREHOUSE_BASE_URL is required when WAREHOUSE_DELEGATION_ENABLED=true")
+		}
+		if c.ServiceClientSecret == "" {
+			return fmt.Errorf("SERVICE_CLIENT_SECRET is required when WAREHOUSE_DELEGATION_ENABLED=true (needed for service-to-service auth to iag-warehouse)")
+		}
 	}
 	if c.IsProduction() {
 		if c.HasWildcardCORS() {

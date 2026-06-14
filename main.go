@@ -17,20 +17,23 @@ import (
 
 	"github.com/alvor-technologies/iag-platform-go/authclient"
 	platformotel "github.com/alvor-technologies/iag-platform-go/otel"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/db"
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/config"
+	"github.com/iag/fleet-tool/backend/internal/consumer"
 	pgdb "github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-iot/iot"
-	"github.com/iag/fleet-tool/backend/internal/migrate"
+	"github.com/iag/fleet-tool/backend/internal/jobs"
 	fleetmw "github.com/iag/fleet-tool/backend/internal/middleware"
+	"github.com/iag/fleet-tool/backend/internal/migrate"
 	"github.com/iag/fleet-tool/backend/internal/notifications"
 	"github.com/iag/fleet-tool/backend/internal/outbox"
 	"github.com/iag/fleet-tool/backend/internal/platform"
 	"github.com/iag/fleet-tool/backend/internal/platformregister"
 	"github.com/iag/fleet-tool/backend/internal/router"
 	"github.com/iag/fleet-tool/backend/internal/store"
+	"github.com/iag/fleet-tool/backend/internal/warehouseclient"
 )
 
 func main() {
@@ -148,6 +151,42 @@ func main() {
 		platformSvc.PublicAPIURL = cfg.PublicAPIURL
 	}
 
+	// Warehouse ("stores") stock delegation: build the outbound client only
+	// when enabled. Config.Validate has already ensured the credentials are
+	// present, so New won't panic.
+	var warehouseClient *warehouseclient.Client
+	if cfg.WarehouseDelegationEnabled {
+		warehouseClient = warehouseclient.New(warehouseclient.Options{
+			BaseURL:      cfg.WarehouseBaseURL,
+			Audience:     cfg.WarehouseAudience,
+			TokenURL:     cfg.AuthTokenURL,
+			ClientID:     cfg.ServiceClientID,
+			ClientSecret: cfg.ServiceClientSecret,
+		})
+		slog.Info("warehouse stock delegation enabled", "warehouse", cfg.WarehouseBaseURL, "audience", cfg.WarehouseAudience)
+
+		// Inbound projection sync: keep parts.stock in step with warehouse
+		// movements. Only meaningful under delegation, so gate it here.
+		if len(cfg.KafkaBrokers) > 0 {
+			whConsumer := consumer.New(consumer.Config{
+				Brokers: cfg.KafkaBrokers,
+				GroupID: strings.TrimSpace(os.Getenv("WAREHOUSE_CONSUMER_GROUP")),
+			}, operationalPool, warehouseClient)
+			go whConsumer.Run(appCtx)
+		} else {
+			slog.Warn("warehouse delegation enabled but KAFKA_BROKERS unset — stock projection will not auto-sync")
+		}
+
+		// Periodic full reconcile: drift-correcting backstop for the event
+		// consumer (missed/out-of-order events self-heal). WAREHOUSE_RECONCILE_SEC=0
+		// disables it (e.g. when running the reconcile out-of-band via fleet-jobs).
+		if sec := strings.TrimSpace(os.Getenv("WAREHOUSE_RECONCILE_SEC")); sec != "0" {
+			interval := durationFromEnvSec("WAREHOUSE_RECONCILE_SEC", 900)
+			go runWarehouseReconcileLoop(appCtx, operationalPool, warehouseClient, interval)
+			slog.Info("warehouse stock reconcile loop started", "interval", interval)
+		}
+	}
+
 	go platformregister.PermissionsLoop(context.Background(), cfg)
 
 	r := router.New(repo, router.Options{
@@ -164,6 +203,7 @@ func main() {
 		TTLReference:        durationFromEnvSec("CACHE_TTL_REFERENCE_SEC", 600),
 		NotificationsBroker: notifBroker,
 		Events:              eventBus,
+		Warehouse:           warehouseClient,
 	})
 
 	notifCtx, cancelNotif := context.WithCancel(context.Background())
@@ -290,6 +330,33 @@ func bootstrapJWKS(v *authclient.Verifier) {
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
+		}
+	}
+}
+
+// runWarehouseReconcileLoop periodically refreshes the parts-stock projection
+// from the authoritative warehouse on-hand. It runs one pass immediately, then
+// on the interval, until ctx is cancelled.
+func runWarehouseReconcileLoop(ctx context.Context, pool *pgxpool.Pool, wh jobs.WarehouseOnHand, interval time.Duration) {
+	tick := func() {
+		passCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		res, err := jobs.ReconcileWarehouseStock(passCtx, pool, wh)
+		if err != nil {
+			slog.Warn("warehouse stock reconcile pass failed", "err", err)
+			return
+		}
+		slog.Info("warehouse stock reconcile pass", "checked", res.Checked, "updated", res.Updated, "errors", res.Errors)
+	}
+	tick()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tick()
 		}
 	}
 }

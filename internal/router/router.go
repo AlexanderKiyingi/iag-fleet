@@ -23,6 +23,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/notifications"
 	"github.com/iag/fleet-tool/backend/internal/security"
 	"github.com/iag/fleet-tool/backend/internal/store"
+	"github.com/iag/fleet-tool/backend/internal/warehouseclient"
 )
 
 // Options configures the router.
@@ -47,6 +48,9 @@ type Options struct {
 	// run the producer).
 	NotificationsBroker *notifications.Broker
 	Events              *events.Bus
+	// Warehouse is the outbound iag-warehouse client. nil when stock
+	// delegation is disabled.
+	Warehouse *warehouseclient.Client
 	Platform            platform.Services
 }
 
@@ -153,7 +157,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	(&handlers.Admin{Repo: repo, Cache: opts.Cache, Config: opts.Config}).Register(api)
 	(&handlers.Reference{Cache: opts.Cache, TTL: opts.TTLReference}).Register(api)
-	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL, Config: opts.Config}).Register(api)
+	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL, Config: opts.Config, Warehouse: opts.Warehouse}).Register(api)
 	(&handlers.Inspections{Repo: repo}).Register(api)
 	(&handlers.PMSchedules{Repo: repo, Events: opts.Events}).Register(api)
 	(&handlers.Dashboard{Repo: repo, Cache: opts.Cache, TTL: opts.TTLDashboard}).Register(api)
