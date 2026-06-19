@@ -26,7 +26,7 @@ type Analytics struct {
 }
 
 func (a *Analytics) Register(rg *gin.RouterGroup) {
-	rg.GET("/analytics/summary", auth.RequireUser(), a.summary)
+	rg.GET("/analytics/summary", auth.RequireAnyFleetView(), a.summary)
 }
 
 // ────────────────────── Response shape ──────────────────────────────

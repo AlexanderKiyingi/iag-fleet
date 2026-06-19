@@ -170,10 +170,10 @@ to auth.
 
 | Method | Path | Permission | Cache | Description |
 |---|---|---|---|---|
-| GET | `/api/dashboard/summary` | authenticated | 30 s | KPIs + active alerts |
-| GET | `/api/analytics/summary` | authenticated | 45 s | Driver scores, fuel trends, compliance state |
-| GET | `/api/reports/summary` | authenticated | — | Period-scoped aggregated report |
-| GET | `/api/calendar/events` | authenticated | — | Cross-module schedule (`from`/`to`, optional filters: `jmp`, `svc`, `cmp`, `req`, `cargo`, `fuel`) |
+| GET | `/api/dashboard/summary` | any `view_*` | 30 s | KPIs + active alerts |
+| GET | `/api/analytics/summary` | any `view_*` | 45 s | Driver scores, fuel trends, compliance state |
+| GET | `/api/reports/summary` | any `view_*` | — | Period-scoped aggregated report |
+| GET | `/api/calendar/events` | any `view_*` | — | Cross-module schedule (`from`/`to`, optional filters: `jmp`, `svc`, `cmp`, `req`, `cargo`, `fuel`) |
 
 ### 4.4 Standard CRUD resources
 

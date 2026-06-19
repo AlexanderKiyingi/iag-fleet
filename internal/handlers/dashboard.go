@@ -26,7 +26,7 @@ type Dashboard struct {
 }
 
 func (d *Dashboard) Register(rg *gin.RouterGroup) {
-	rg.GET("/dashboard/summary", auth.RequireUser(), d.summary)
+	rg.GET("/dashboard/summary", auth.RequireAnyFleetView(), d.summary)
 }
 
 type dashboardKpis struct {

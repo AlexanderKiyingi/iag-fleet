@@ -17,7 +17,7 @@ type Reports struct {
 }
 
 func (r *Reports) Register(rg *gin.RouterGroup) {
-	rg.GET("/reports/summary", auth.RequireUser(), r.summary)
+	rg.GET("/reports/summary", auth.RequireAnyFleetView(), r.summary)
 }
 
 type reportBucket struct {
