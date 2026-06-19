@@ -44,6 +44,7 @@ type IoT struct {
 	Hub    *iot.Hub
 	Repo   *store.Repository // optional: vehicle validation + list enrichment; nil in tests
 	Events *events.Bus       // optional: registry events from test-ping path
+	Gate   *StreamGate       // optional: caps concurrent SSE streams; nil = unlimited
 }
 
 // requireStore ensures telemetry tables are wired; tests may build a
@@ -614,10 +615,17 @@ func tripExists(existing []models.Trip, vehicleID string, started time.Time) boo
 // cross-process fallback (the TCP gateway is in another process and so its
 // pings reach this loop only via the polled DB query, not the broker).
 func (h *IoT) stream(c *gin.Context) {
+	release, ok := h.Gate.reserveStream(c)
+	if !ok {
+		return
+	}
+	defer release()
+
 	vehicleID := c.Param("id")
 	if !h.requireVehicleForTrack(c, vehicleID) {
 		return
 	}
+	expiry := tokenExpiry(c)
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
@@ -654,6 +662,7 @@ func (h *IoT) stream(c *gin.Context) {
 	defer ticker.Stop()
 
 	var lastSeenTS time.Time
+	var pollFails int
 	ctx := c.Request.Context()
 
 	for {
@@ -670,13 +679,28 @@ func (h *IoT) stream(c *gin.Context) {
 			}
 			emit(p)
 		case <-ticker.C:
-			p, err := h.Store.LatestPing(ctx, vehicleID)
-			if err != nil || p == nil {
-				continue
+			// Close once the bearer token lapses so a stream can't outlive its
+			// auth; the client reconnects with a fresh token.
+			if tokenExpired(expiry, time.Now()) {
+				sseEvent(c.Writer, flusher, "expired", `{"reason":"token expired; reconnect"}`)
+				return
 			}
-			if p.TS.After(lastSeenTS) {
+			p, err := h.Store.LatestPing(ctx, vehicleID)
+			switch {
+			case err != nil:
+				// Don't hang alive-but-empty: surface and close after a run of
+				// failures instead of silently swallowing every poll error.
+				pollFails++
+				if pollFails >= maxConsecutivePollFails {
+					sseEvent(c.Writer, flusher, "error", `{"reason":"telemetry temporarily unavailable"}`)
+					return
+				}
+			case p != nil && p.TS.After(lastSeenTS):
+				pollFails = 0
 				lastSeenTS = p.TS
 				emit(*p)
+			default:
+				pollFails = 0
 			}
 			// Comment frame keeps the connection warm against idle proxies.
 			fmt.Fprintf(c.Writer, ": keep-alive\n\n")

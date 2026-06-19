@@ -54,7 +54,7 @@ func (s *Store) ClaimBatch(ctx context.Context, limit int, backoff time.Duration
 	rows, err := s.pool.Query(ctx, `
 		WITH due AS (
 			SELECT id FROM fleet_event_outbox
-			WHERE dispatched_at IS NULL AND available_at <= NOW()
+			WHERE dispatched_at IS NULL AND dead_lettered_at IS NULL AND available_at <= NOW()
 			ORDER BY id
 			FOR UPDATE SKIP LOCKED
 			LIMIT $1
@@ -105,27 +105,54 @@ func (s *Store) MarkFailed(ctx context.Context, id int64, errMsg string, retryDe
 	return err
 }
 
+// DeadLetter parks a row that has exhausted its retries: it stops appearing in
+// ClaimBatch (dead_lettered_at IS NOT NULL) but is retained with its last error
+// for inspection / manual replay.
+func (s *Store) DeadLetter(ctx context.Context, id int64, errMsg string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE fleet_event_outbox
+		SET dead_lettered_at = NOW(), last_error = $1
+		WHERE id = $2
+	`, errMsg, id)
+	return err
+}
+
 // Dispatcher writes a drained outbox row to Kafka.
 type Dispatcher interface {
 	DispatchOutbox(ctx context.Context, row Row) error
 }
 
+// claimStore is the subset of *Store the drain loop needs. Narrowed to an
+// interface so drainOnce's retry/dead-letter branching is unit-testable.
+type claimStore interface {
+	ClaimBatch(ctx context.Context, limit int, backoff time.Duration) ([]Row, error)
+	MarkDispatched(ctx context.Context, id int64) error
+	MarkFailed(ctx context.Context, id int64, errMsg string, retryDelay time.Duration) error
+	DeadLetter(ctx context.Context, id int64, errMsg string) error
+}
+
+// defaultMaxAttempts bounds retries before a poison row is dead-lettered. With
+// exponential backoff capped at maxBackoff, this spans hours before giving up.
+const defaultMaxAttempts = 12
+
 // Publisher periodically drains the outbox.
 type Publisher struct {
-	store      *Store
-	dispatcher Dispatcher
-	tick       time.Duration
-	batch      int
-	maxBackoff time.Duration
+	store       claimStore
+	dispatcher  Dispatcher
+	tick        time.Duration
+	batch       int
+	maxBackoff  time.Duration
+	maxAttempts int
 }
 
 func NewPublisher(store *Store, d Dispatcher) *Publisher {
 	return &Publisher{
-		store:      store,
-		dispatcher: d,
-		tick:       2 * time.Second,
-		batch:      32,
-		maxBackoff: 5 * time.Minute,
+		store:       store,
+		dispatcher:  d,
+		tick:        2 * time.Second,
+		batch:       32,
+		maxBackoff:  5 * time.Minute,
+		maxAttempts: defaultMaxAttempts,
 	}
 }
 
@@ -159,9 +186,18 @@ func (p *Publisher) drainOnce(ctx context.Context) (int, error) {
 	}
 	for _, r := range rows {
 		if err := p.dispatcher.DispatchOutbox(ctx, r); err != nil {
+			// r.Attempts is post-increment (ClaimBatch bumped it). Once it
+			// reaches the cap, stop retrying and dead-letter so one poison row
+			// can't block the drain forever.
+			if r.Attempts >= p.maxAttempts {
+				_ = p.store.DeadLetter(ctx, r.ID, err.Error())
+				slog.Error("outbox event dead-lettered after max attempts",
+					"id", r.ID, "type", r.EventType, "attempts", r.Attempts, "err", err)
+				continue
+			}
 			delay := backoffFor(r.Attempts, p.maxBackoff)
 			_ = p.store.MarkFailed(ctx, r.ID, err.Error(), delay)
-			slog.Warn("outbox dispatch failed", "id", r.ID, "type", r.EventType, "err", err)
+			slog.Warn("outbox dispatch failed", "id", r.ID, "type", r.EventType, "attempts", r.Attempts, "err", err)
 			continue
 		}
 		_ = p.store.MarkDispatched(ctx, r.ID)

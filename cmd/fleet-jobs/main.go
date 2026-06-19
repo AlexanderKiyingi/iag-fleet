@@ -37,6 +37,7 @@ func main() {
 	doMarkMxOverdue := flag.Bool("mark-mx-overdue", false, "mark scheduled work orders past date as overdue")
 	doRecomputeCompliance := flag.Bool("recompute-compliance", false, "derive compliance status from expiry dates")
 	doReconcileWh := flag.Bool("reconcile-warehouse-stock", false, "refresh parts.stock from iag-warehouse on-hand (delegation projection backstop)")
+	doSchedule := flag.Bool("schedule", false, "run as a long-lived worker that schedules the jobs on their cadences (until SIGTERM)")
 	pmWithinDays := flag.Int("pm-within-days", jobs.DefaultPMWithinDays, "PM evaluate/due lookahead days")
 	pmWithinKm := flag.Float64("pm-within-km", jobs.DefaultPMWithinKm, "PM evaluate/due odometer lookahead km")
 	linkDays := flag.Int("link-days", 90, "lookback days for --link-fuel")
@@ -59,9 +60,9 @@ func main() {
 	runMarkMxOverdue := *doMarkMxOverdue
 	runRecomputeCompliance := *doRecomputeCompliance
 	runReconcileWh := *doReconcileWh
-	if !runAgg && !runPurge && !runLink && !runStale && !runDetect &&
+	if !*doSchedule && !runAgg && !runPurge && !runLink && !runStale && !runDetect &&
 		!runEvaluatePM && !runMarkMxOverdue && !runRecomputeCompliance && !runReconcileWh {
-		fmt.Fprintln(os.Stderr, "specify --all, --aggregate, --purge, --mark-stale, --detect-trips, --evaluate-pm, --mark-mx-overdue, --recompute-compliance, --reconcile-warehouse-stock, and/or --link-fuel")
+		fmt.Fprintln(os.Stderr, "specify --schedule (long-lived worker) or a one-shot job: --all, --aggregate, --purge, --mark-stale, --detect-trips, --evaluate-pm, --mark-mx-overdue, --recompute-compliance, --reconcile-warehouse-stock, and/or --link-fuel")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -90,6 +91,18 @@ func main() {
 	defer func() { _ = eventBus.Close() }()
 	if eventBus.Enabled() {
 		log.Print("fleet-jobs: Kafka event bus enabled")
+	}
+
+	// Long-lived worker mode: schedule every job on its cadence and block until
+	// SIGTERM. One replica owns this — do not run it on every API instance.
+	if *doSchedule {
+		runSchedulerMode(operationalPool, telemetryPool, iotStore, eventBus, schedulerConfig{
+			purgeDays:    *purgeDays,
+			linkDays:     *linkDays,
+			pmWithinDays: *pmWithinDays,
+			pmWithinKm:   *pmWithinKm,
+		})
+		return
 	}
 
 	if runAgg {

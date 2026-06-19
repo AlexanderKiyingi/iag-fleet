@@ -19,6 +19,7 @@ import (
 type FleetLive struct {
 	Repo *store.Repository
 	Hub  *iot.Hub
+	Gate *StreamGate // optional: caps concurrent SSE streams; nil = unlimited
 }
 
 func (h *FleetLive) Register(rg *gin.RouterGroup) {
@@ -41,13 +42,20 @@ type fleetPayload struct {
 }
 
 func (h *FleetLive) stream(c *gin.Context) {
+	release, ok := h.Gate.reserveStream(c)
+	if !ok {
+		return
+	}
+	defer release()
+
+	expiry := tokenExpiry(c)
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.WriteHeader(http.StatusOK)
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
+	flusher, isFlusher := c.Writer.(http.Flusher)
+	if !isFlusher {
 		return
 	}
 
@@ -70,18 +78,20 @@ func (h *FleetLive) stream(c *gin.Context) {
 		flusher.Flush()
 	}
 
-	loadAll := func() {
+	loadAll := func() error {
 		vs, err := h.Repo.Vehicles.List(ctx)
 		if err != nil {
-			return
+			return err
 		}
 		for _, v := range vs {
 			snapsByID[v.ID] = vehicleSnap(v)
 		}
 		emitAll()
+		return nil
 	}
 
-	loadAll()
+	_ = loadAll() // initial paint; subsequent failures surface on the ticker
+	var pollFails int
 
 	var liveCh <-chan iot.Ping
 	var liveCancel func()
@@ -111,7 +121,22 @@ func (h *FleetLive) stream(c *gin.Context) {
 				emitAll()
 			}
 		case <-tick.C:
-			loadAll()
+			// Close once the bearer token lapses so a stream can't outlive its auth.
+			if tokenExpired(expiry, time.Now()) {
+				sseEvent(c.Writer, flusher, "expired", `{"reason":"token expired; reconnect"}`)
+				return
+			}
+			if err := loadAll(); err != nil {
+				// Surface and close after a run of failures rather than streaming
+				// keep-alives over a dead DB connection forever.
+				pollFails++
+				if pollFails >= maxConsecutivePollFails {
+					sseEvent(c.Writer, flusher, "error", `{"reason":"fleet state temporarily unavailable"}`)
+					return
+				}
+			} else {
+				pollFails = 0
+			}
 			fmt.Fprintf(c.Writer, ": keep-alive\n\n")
 			flusher.Flush()
 		}

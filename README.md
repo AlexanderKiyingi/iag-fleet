@@ -81,7 +81,7 @@ Additional binaries (under `cmd/`):
 | `iot-gateway`        | Native Teltonika Codec 8/8E **TCP** listener (default `:5027`)     |
 | `telemetry-aggregate`| Rolls raw pings into `telemetry_daily` (intended for nightly cron, just after midnight UTC) |
 | `telemetry-purge`    | Drops telemetry pings older than `--days` (intended for nightly cron) |
-| `fleet-jobs`         | Runs aggregate, purge, link-fuel, and mark-stale (`--all`, `--aggregate`, `--purge`, `--mark-stale`) for cron/Kubernetes |
+| `fleet-jobs`         | Maintenance jobs. `--schedule` runs them all as a long-lived worker (recommended); or one-shot flags (`--all`, `--aggregate`, `--purge`, `--mark-stale`, …) for external cron/Kubernetes |
 
 ## Database (Postgres)
 
@@ -464,7 +464,23 @@ Sized for **~50 vehicles × 1 ping/min ≈ 26M pings/year**. Defaults:
 - 365-day raw retention; drop daily via `go run ./cmd/telemetry-purge --days 365`.
 - Daily aggregates kept indefinitely; populated nightly by `go run ./cmd/telemetry-aggregate` (defaults to "yesterday UTC, every vehicle that had pings").
 
-**Recommended cron** (just after midnight UTC):
+**Recommended: the self-scheduling worker (`--schedule`).** Deploy one long-lived
+worker — same image as the API, entrypoint `/app/fleet-jobs --schedule` — and it
+runs every job on its cadence internally (no platform cron needed):
+
+- `mark-stale` every `FLEET_SCHED_STALE_INTERVAL` (default **1h**)
+- aggregate → link-fuel → detect-trips → purge every `FLEET_SCHED_DAILY_INTERVAL` (default **24h**)
+- recompute-compliance → mark-mx-overdue → evaluate-pm every 24h
+
+Run **exactly one replica** (it is the single owner of these jobs). On Compose
+it's the `fleet-scheduler` service in `deploy/docker-compose.yml`. On **Railway**,
+add a second service from the same repo/image with the start command
+`/app/fleet-jobs --schedule` and the same `DATABASE_URL` / `TELEMETRY_DATABASE_URL`
+/ `EVENT_BUS_ENABLED` / `KAFKA_BROKERS` as the API service (no public port, no
+healthcheck). Each job is idempotent, so a restart that re-runs a day is safe.
+
+**Alternative: external cron** (Kubernetes CronJob / systemd timer / Railway cron),
+if you'd rather not run a persistent worker — just after midnight UTC:
 
 ```cron
 05 0 * * *  cd /opt/haula-backend && DATABASE_URL=... go run ./cmd/fleet-jobs --all --purge-days 365

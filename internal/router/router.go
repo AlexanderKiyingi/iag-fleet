@@ -164,7 +164,10 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	(&handlers.Analytics{Repo: repo, Cache: opts.Cache, TTL: opts.TTLAnalytics}).Register(api)
 	(&handlers.Reports{Repo: repo}).Register(api)
 	(&handlers.Calendar{Repo: repo}).Register(api)
-	(&handlers.FleetLive{Repo: repo, Hub: opts.IoTHub}).Register(api)
+	// One shared gate caps total concurrent SSE streams (track + fleet-live)
+	// across the service (FLEET_MAX_SSE_STREAMS, default 1000).
+	streamGate := handlers.NewStreamGate()
+	(&handlers.FleetLive{Repo: repo, Hub: opts.IoTHub, Gate: streamGate}).Register(api)
 
 	// Notifications. Always register so the route table matches the
 	// frontend's expectations even if the producer ticker isn't started
@@ -180,7 +183,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// Always attach IoT routes so the route table matches the Next.js client
 	// even if a test harness omits a store — handlers return 503 when
 	// telemetry is not configured instead of 404-no-route.
-	(&handlers.IoT{Store: opts.IoTStore, Hub: opts.IoTHub, Repo: repo, Events: opts.Events}).Register(api)
+	(&handlers.IoT{Store: opts.IoTStore, Hub: opts.IoTHub, Repo: repo, Events: opts.Events, Gate: streamGate}).Register(api)
 
 	return r
 }
