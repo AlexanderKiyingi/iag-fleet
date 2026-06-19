@@ -53,6 +53,26 @@ func RequireAnyPerm(codenames ...string) gin.HandlerFunc {
 	}
 }
 
+// fleetViewPerms enumerates every fleet read codename. It mirrors the seeded
+// view_* catalogue (iag-authentication fleetCatalogue) plus view_telemetry.
+var fleetViewPerms = []string{
+	"view_vehicle", "view_driver", "view_jmp", "view_cargo", "view_cargo_doc",
+	"view_maintenance_item", "view_part", "view_tyre", "view_trip",
+	"view_safety_event", "view_compliance_item", "view_service_request",
+	"view_task_item", "view_deployment_day", "view_fuel_record",
+	"view_vehicle_inspection", "view_pm_schedule", "view_telemetry",
+}
+
+// RequireAnyFleetView gates aggregate/summary endpoints (dashboard, analytics,
+// reports, calendar) that re-expose entity data the per-entity list endpoints
+// already gate on view_*. It passes if the principal holds at least one fleet
+// read permission, so an authenticated principal with no fleet permissions
+// (e.g. a user scoped only to another domain) can't read fleet data in
+// summarized form.
+func RequireAnyFleetView() gin.HandlerFunc {
+	return RequireAnyPerm(fleetViewPerms...)
+}
+
 // RequireSuperuser blocks any non-superuser.
 func RequireSuperuser() gin.HandlerFunc {
 	return func(c *gin.Context) {

@@ -17,7 +17,7 @@ type Calendar struct {
 }
 
 func (cal *Calendar) Register(rg *gin.RouterGroup) {
-	rg.GET("/calendar/events", auth.RequireUser(), cal.events)
+	rg.GET("/calendar/events", auth.RequireAnyFleetView(), cal.events)
 }
 
 type calendarEvent struct {
