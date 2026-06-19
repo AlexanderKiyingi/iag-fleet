@@ -84,6 +84,11 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	r.GET("/health", health)
 	r.GET("/ready", health)
 
+	// Browsers can't set an Authorization header on a WebSocket, so the realtime
+	// client passes the token as ?token=. Through the gateway this is lifted to a
+	// Bearer header upstream; for a direct connection we lift it here so the
+	// normal principal middleware authenticates the upgrade.
+	r.Use(liftWebSocketToken())
 	if opts.PlatformAuth != nil {
 		r.Use(opts.PlatformAuth.AttachPrincipal())
 	}
@@ -178,6 +183,13 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	}
 	(&handlers.Notifications{Repo: repo, Broker: notifBroker}).Register(api)
 
+	// Unified realtime WebSocket: multiplexes fleet positions, per-vehicle track,
+	// and the notification bell over one connection (GET /api/realtime/ws).
+	(&handlers.RealtimeWS{
+		Repo: repo, Hub: opts.IoTHub, Store: opts.IoTStore,
+		Broker: notifBroker, AllowedOrigin: opts.AllowedOrigin,
+	}).Register(api)
+
 	(&handlers.Routing{OSRMBaseURL: opts.RoutingOSRMURL}).Register(api)
 
 	// Always attach IoT routes so the route table matches the Next.js client
@@ -203,6 +215,20 @@ func perRouteRateLimits(byPath map[string]gin.HandlerFunc, fallback gin.HandlerF
 			return
 		}
 		fallback(c)
+	}
+}
+
+// liftWebSocketToken copies a ?token= query param onto the Authorization header
+// for WebSocket upgrade requests, so the standard principal middleware can
+// authenticate a direct (non-gateway) realtime connection.
+func liftWebSocketToken() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.GetHeader("Authorization") == "" && strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
+			if t := c.Query("token"); t != "" {
+				c.Request.Header.Set("Authorization", "Bearer "+t)
+			}
+		}
+		c.Next()
 	}
 }
 
