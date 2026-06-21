@@ -341,12 +341,13 @@ func (r *Resource[T, PT]) bulkPatch(c *gin.Context) {
 	})
 }
 
-// bulkDeleteBody is `{ "ids": ["...", "..."] }`. Single SQL statement
-// (DELETE … WHERE id = ANY) is already atomic — no tx needed. Returns
-// the count actually removed; rows that didn't exist are silently
-// absent from the count, which matches what `DELETE /:id` does on a
-// stale id (404) — the bulk endpoint just doesn't 404 if some are
-// missing, since "delete what's there" is the common batch intent.
+// bulkDeleteBody is `{ "ids": ["...", "..."] }`. Returns the count
+// actually removed; rows that didn't exist are silently absent from the
+// count, which matches what `DELETE /:id` does on a stale id (404) — the
+// bulk endpoint just doesn't 404 if some are missing, since "delete
+// what's there" is the common batch intent. Resources with a BeforeDelete
+// guard may also return "blocked": [{id, error}] for rows the guard
+// refused (see bulkDelete).
 type bulkDeleteBody struct {
 	IDs []string `json:"ids" binding:"required"`
 }
@@ -371,16 +372,62 @@ func (r *Resource[T, PT]) bulkDelete(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	deleted, err := r.Collection.BulkDelete(ctx, body.IDs)
-	if err != nil {
-		respondError(c, err)
+	user := currentUser(c, r.Repo)
+
+	// Fast path: with no per-row delete guard or side-effect, the whole
+	// batch is one atomic DELETE … WHERE id = ANY. This covers every
+	// entity that doesn't register BeforeDelete/AfterDelete.
+	if r.BeforeDelete == nil && r.AfterDelete == nil {
+		deleted, err := r.Collection.BulkDelete(ctx, body.IDs)
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		for _, id := range body.IDs {
+			r.Repo.LogBest(ctx, "delete", r.Entity, id, "bulk", user)
+		}
+		c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 		return
 	}
-	user := currentUser(c, r.Repo)
+
+	// Hook path: BeforeDelete/AfterDelete must run per id exactly as the
+	// single-row remove() does — otherwise bulk delete would bypass the
+	// referential guards (e.g. a vehicle/driver on a live journey) and skip
+	// the domain-event emission. A row blocked by its guard is collected
+	// into "blocked" and the rest still delete, matching the "delete what's
+	// deletable" intent the missing-id behavior already implies. The batch
+	// is capped at maxBulkItems and only two entities take this path, so the
+	// per-row statements are bounded.
+	deleted := 0
+	blocked := make([]gin.H, 0)
 	for _, id := range body.IDs {
+		if r.BeforeDelete != nil {
+			if err := r.BeforeDelete(ctx, id); err != nil {
+				blocked = append(blocked, gin.H{"id": id, "error": err.Error()})
+				continue
+			}
+		}
+		if err := r.Collection.Delete(ctx, id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				// Stale id — silently absent from the count, same as a
+				// single DELETE /:id 404 against a missing row.
+				continue
+			}
+			respondError(c, err)
+			return
+		}
+		if r.AfterDelete != nil {
+			r.AfterDelete(ctx, id)
+		}
 		r.Repo.LogBest(ctx, "delete", r.Entity, id, "bulk", user)
+		deleted++
 	}
-	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+
+	resp := gin.H{"deleted": deleted}
+	if len(blocked) > 0 {
+		resp["blocked"] = blocked
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (r *Resource[T, PT]) replace(c *gin.Context) {

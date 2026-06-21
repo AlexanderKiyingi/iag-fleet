@@ -67,6 +67,50 @@ func TestIntegration_DeleteBlockedByLiveJMP(t *testing.T) {
 	}
 }
 
+// S2: bulk delete must honor the same live-journey guard as single delete —
+// the referenced vehicle is reported in "blocked" while the free one is
+// removed. Regression test for bulkDelete bypassing BeforeDelete.
+func TestIntegration_BulkDeleteHonorsGuard(t *testing.T) {
+	pool, cleanup := testdb.Pool(t)
+	defer cleanup()
+	repo := store.NewRepository(pool)
+	ctx := context.Background()
+	gin.SetMode(gin.TestMode)
+
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-BUSY", "BSY-1")); err != nil {
+		t.Fatalf("seed busy vehicle: %v", err)
+	}
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-FREE", "FRE-1")); err != nil {
+		t.Fatalf("seed free vehicle: %v", err)
+	}
+	if _, err := repo.JMPs.Add(ctx, models.JMP{
+		ID: "JMP-BULK", VehicleID: "VEH-BUSY", Purpose: "x",
+		StartDate: "2032-03-01", ExpectedReturn: "2032-03-03", Status: "active",
+	}); err != nil {
+		t.Fatalf("seed jmp: %v", err)
+	}
+
+	vr := NewVehicleResource(repo, nil)
+	w := postJSONTo(vr.bulkDelete, gin.H{"ids": []string{"VEH-BUSY", "VEH-FREE"}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("bulk delete: status %d, want 200; %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"deleted":1`) {
+		t.Fatalf("bulk delete: want deleted:1, got %s", body)
+	}
+	if !strings.Contains(body, "VEH-BUSY") || !strings.Contains(body, "live journey") {
+		t.Fatalf("bulk delete: want VEH-BUSY blocked by live journey, got %s", body)
+	}
+	// The free vehicle is gone; the busy one survives the guard.
+	if _, err := repo.Vehicles.Get(ctx, "VEH-FREE"); err == nil {
+		t.Fatalf("VEH-FREE should have been deleted")
+	}
+	if _, err := repo.Vehicles.Get(ctx, "VEH-BUSY"); err != nil {
+		t.Fatalf("VEH-BUSY should have survived the guard, got %v", err)
+	}
+}
+
 // U1: one current tyre per (vehicle, position); retired tyres don't block.
 func TestIntegration_TyrePositionUnique(t *testing.T) {
 	pool, cleanup := testdb.Pool(t)

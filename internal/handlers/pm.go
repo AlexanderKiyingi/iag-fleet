@@ -19,9 +19,16 @@ type PMSchedules struct {
 }
 
 func (h *PMSchedules) Register(rg *gin.RouterGroup) {
+	// PM's domain logic (validate + next-due recompute) lives in the
+	// BeforeCreate/BeforeUpdate hooks so the generic CRUD — including the
+	// /bulk endpoints — applies it uniformly. This is what lets PM share
+	// the same bulk-create/patch/delete surface as every other entity
+	// instead of hand-rolled per-route handlers.
 	res := Resource[models.PMSchedule, *models.PMSchedule]{
 		Repo: h.Repo, Collection: h.Repo.PMSchedules,
 		Entity: "pm_schedule", IDPrefix: "PM",
+		BeforeCreate: h.validateAndRecompute,
+		BeforeUpdate: h.validateAndRecompute,
 	}
 	g := rg.Group("/pm-schedules")
 	view := auth.RequirePerm("view_pm_schedule")
@@ -33,11 +40,30 @@ func (h *PMSchedules) Register(rg *gin.RouterGroup) {
 	g.GET("/search", view, res.search)
 	g.GET("/due", view, h.due)
 	g.GET("/:id", view, res.get)
-	g.POST("", add, h.create)
+	g.POST("", add, res.create)
+	g.POST("/bulk", add, res.bulkCreate)
 	g.POST("/evaluate", change, h.evaluate)
-	g.PUT("/:id", change, h.replace)
-	g.PATCH("/:id", change, h.patch)
+	g.PUT("/:id", change, res.replace)
+	g.PATCH("/:id", change, res.patch)
+	g.PATCH("/bulk", change, res.bulkPatch)
 	g.DELETE("/:id", del, res.remove)
+	g.DELETE("/bulk", del, res.bulkDelete)
+}
+
+// validateAndRecompute is the shared create/update hook. It enforces the PM
+// domain invariants (name, service type, positive intervals, vehicle exists)
+// and then derives next_due_km / next_due_date from the intervals and the
+// last-service markers. The two hook fields share one signature, so the same
+// method backs both BeforeCreate and BeforeUpdate — and, through them, the
+// generic single-row and bulk handlers alike. It reads only the item's own
+// fields (no path params), which is what makes it safe to run per row in a
+// batch.
+func (h *PMSchedules) validateAndRecompute(c *gin.Context, item *models.PMSchedule) error {
+	if err := validatePMSchedule(c.Request.Context(), h.Repo, item); err != nil {
+		return err
+	}
+	store.RecomputePMNextDue(item)
+	return nil
 }
 
 func pmThresholds(c *gin.Context, strict bool) (withinDays int, withinKm float64) {
@@ -90,79 +116,4 @@ func (h *PMSchedules) evaluate(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, res)
-}
-
-func (h *PMSchedules) create(c *gin.Context) {
-	var item models.PMSchedule
-	if err := c.ShouldBindJSON(&item); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if item.ID == "" {
-		item.ID = generateID("PM")
-	}
-	if err := validatePMSchedule(c.Request.Context(), h.Repo, &item); err != nil {
-		respondMutationError(c, err)
-		return
-	}
-	store.RecomputePMNextDue(&item)
-	created, err := h.Repo.PMSchedules.Add(c.Request.Context(), item)
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	h.Repo.LogBest(c.Request.Context(), "create", "pm_schedule", created.ID, "", currentUser(c, h.Repo))
-	c.JSON(http.StatusCreated, created)
-}
-
-func (h *PMSchedules) replace(c *gin.Context) {
-	id := c.Param("id")
-	var item models.PMSchedule
-	if err := c.ShouldBindJSON(&item); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	item.ID = id
-	if err := validatePMSchedule(c.Request.Context(), h.Repo, &item); err != nil {
-		respondMutationError(c, err)
-		return
-	}
-	store.RecomputePMNextDue(&item)
-	updated, err := h.Repo.PMSchedules.Replace(c.Request.Context(), id, item)
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, updated)
-}
-
-func (h *PMSchedules) patch(c *gin.Context) {
-	id := c.Param("id")
-	ctx := c.Request.Context()
-	existing, err := h.Repo.PMSchedules.Get(ctx, id)
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	patchBytes, err := c.GetRawData()
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	merged, err := mergeJSON(existing, patchBytes)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if err := validatePMSchedule(ctx, h.Repo, &merged); err != nil {
-		respondMutationError(c, err)
-		return
-	}
-	store.RecomputePMNextDue(&merged)
-	updated, err := h.Repo.PMSchedules.Replace(ctx, id, merged)
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, updated)
 }
