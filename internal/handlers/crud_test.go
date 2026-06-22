@@ -84,6 +84,44 @@ func TestMergeJSONCoercesStringScalars(t *testing.T) {
 	}
 }
 
+// Editing a record whose numeric columns are unset posts them as blank
+// strings ({"lat":""}). Those must null out (value field → zero, pointer
+// field → nil) instead of failing the unmarshal with the "cannot unmarshal
+// string into Go struct field Vehicle.lat of type float64" error.
+func TestMergeJSONCoercesEmptyStringScalars(t *testing.T) {
+	existing := models.Vehicle{ID: "VEH-1", Lat: 1, Lng: 2, Year: 2019}
+	seat := 14
+	existing.SeatCapacity = &seat
+
+	patch := []byte(`{"lat":"","lng":"","year":"","fuelTracker":"","seatCapacity":""}`)
+
+	merged, err := mergeJSON(existing, patch)
+	if err != nil {
+		t.Fatalf("mergeJSON returned error: %v", err)
+	}
+	if merged.Lat != 0 || merged.Lng != 0 || merged.Year != 0 {
+		t.Errorf("blank value fields not zeroed: lat=%v lng=%v year=%d", merged.Lat, merged.Lng, merged.Year)
+	}
+	if merged.FuelTracker {
+		t.Errorf("blank bool not zeroed: fuelTracker=%v", merged.FuelTracker)
+	}
+	if merged.SeatCapacity != nil {
+		t.Errorf("blank pointer field not nilled: seatCapacity=%v", merged.SeatCapacity)
+	}
+}
+
+// The bind path (POST/PUT) must tolerate blank numeric strings the same way.
+func TestBindJSONCoercedEmptyStringScalars(t *testing.T) {
+	var v models.Vehicle
+	c := bodyContext(`{"id":"VEH-1","lat":"","year":"","seatCapacity":""}`)
+	if err := bindJSONCoerced(c, &v); err != nil {
+		t.Fatalf("bindJSONCoerced error on blank scalars: %v", err)
+	}
+	if v.Lat != 0 || v.Year != 0 || v.SeatCapacity != nil {
+		t.Errorf("blanks not nulled: lat=%v year=%d seat=%v", v.Lat, v.Year, v.SeatCapacity)
+	}
+}
+
 // A real number in the patch must keep working unchanged.
 func TestMergeJSONKeepsNumericValues(t *testing.T) {
 	existing := models.Vehicle{ID: "VEH-2"}

@@ -565,9 +565,10 @@ func mergeJSON[T any](existing T, patch []byte) (T, error) {
 // because the frontend submits HTML form values as strings, so numeric and
 // boolean columns (lat, lng, year, fuel, …) can arrive quoted and would
 // otherwise fail the map→struct unmarshal. Only string values whose target
-// field is a numeric/bool kind are touched (pointer fields are unwrapped);
-// genuine string fields, empty strings, and unparseable values are left as-is
-// so legitimately bad input still errors in the caller.
+// field is a numeric/bool kind are touched (pointer fields are unwrapped):
+// a blank "" is nulled out (so an unset lat/lng/year doesn't 400), and a
+// non-empty value is parsed. Genuine string fields and unparseable non-empty
+// values are left as-is so legitimately bad input still errors in the caller.
 // bindJSONCoerced decodes a single JSON object request body into dst, first
 // coercing string-encoded numeric/bool fields to dst's scalar field types —
 // the same tolerance mergeJSON applies on PATCH. create (POST) and replace
@@ -629,12 +630,32 @@ func coerceScalarStrings(t reflect.Type, m map[string]any) {
 			continue
 		}
 		s, ok := m[name].(string)
-		if !ok || s == "" {
+		if !ok {
 			continue
 		}
 		ft := t.Field(i).Type
 		for ft.Kind() == reflect.Ptr {
 			ft = ft.Elem()
+		}
+		isScalar := false
+		switch ft.Kind() {
+		case reflect.Float32, reflect.Float64,
+			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+			reflect.Bool:
+			isScalar = true
+		}
+		if !isScalar {
+			continue
+		}
+		// A blank form value for a numeric/bool column arrives as "" and must
+		// be nulled out: JSON null unmarshals cleanly into both pointer fields
+		// (→ nil) and value fields (→ zero), whereas "" fails the map→struct
+		// unmarshal with "cannot unmarshal string into … float64". This is the
+		// common case of editing a record whose lat/lng/etc. is unset.
+		if s == "" {
+			m[name] = nil
+			continue
 		}
 		switch ft.Kind() {
 		case reflect.Float32, reflect.Float64:
