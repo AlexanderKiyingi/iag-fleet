@@ -85,7 +85,7 @@ func TestIntegration_RequestAssignPatchBlocked(t *testing.T) {
 		t.Fatalf("seed request: %v", err)
 	}
 
-	rr := NewRequestResource(repo)
+	rr := NewRequestResource(repo, nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Params = gin.Params{{Key: "id", Value: "REQ-RQ"}}

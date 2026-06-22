@@ -436,10 +436,46 @@ type ServiceRequest struct {
 	AssignedDriverID     string `json:"assignedDriverId,omitempty"  db:"assigned_driver_id"`
 	JmpID                string `json:"jmpId,omitempty"             db:"jmp_id"`
 	TaskID               string `json:"taskId,omitempty"            db:"task_id"`
+	// ApprovedBy / ApprovedAt record who moved the request into "approved"
+	// and when — the approval audit trail. Stamped the first time the status
+	// reaches "approved", via either the /advance workflow endpoint or the
+	// generic PATCH path (mirrors the JMP mileage-approval fields).
+	ApprovedBy string `json:"approvedBy,omitempty" db:"approved_by"`
+	ApprovedAt string `json:"approvedAt,omitempty" db:"approved_at" dbcast:"timestamptz"`
 }
 
 func (s ServiceRequest) GetID() string    { return s.ID }
 func (s *ServiceRequest) SetID(id string) { s.ID = id }
+
+// FuelRequest is a pre-authorisation for a fuel purchase. Unlike FuelRecord —
+// which logs fuel that was already dispensed — a FuelRequest moves through an
+// approval lifecycle (submitted → approved/rejected → fulfilled/cancelled).
+// On fulfilment the request spawns a FuelRecord (FuelRecordID links the two)
+// and the existing fleet.fuel.recorded finance event fires from that record.
+type FuelRequest struct {
+	ID              string  `json:"id"                       db:"id"`
+	VehicleID       string  `json:"vehicleId"                db:"vehicle_id"`
+	DriverID        string  `json:"driverId,omitempty"       db:"driver_id"`
+	RequesterName   string  `json:"requesterName"            db:"requester_name"`
+	RequesterDept   string  `json:"requesterDept,omitempty"  db:"requester_dept"`
+	RequestedLitres float64 `json:"requestedLitres"          db:"requested_litres"`
+	EstUnitPrice    float64 `json:"estUnitPrice,omitempty"   db:"est_unit_price"`
+	EstTotal        float64 `json:"estTotal,omitempty"       db:"est_total"`
+	Station         string  `json:"station,omitempty"        db:"station"`
+	Purpose         string  `json:"purpose,omitempty"        db:"purpose"`
+	Urgency         string  `json:"urgency,omitempty"        db:"urgency"`
+	Status          string  `json:"status"                   db:"status"`
+	Notes           string  `json:"notes,omitempty"          db:"notes"`
+	ReviewerNotes   string  `json:"reviewerNotes,omitempty"  db:"reviewer_notes"`
+	SubmittedAt     string  `json:"submittedAt,omitempty"    db:"submitted_at" dbcast:"timestamptz"`
+	ApprovedBy      string  `json:"approvedBy,omitempty"     db:"approved_by"`
+	ApprovedAt      string  `json:"approvedAt,omitempty"     db:"approved_at"  dbcast:"timestamptz"`
+	FuelRecordID    string  `json:"fuelRecordId,omitempty"   db:"fuel_record_id"`
+	CreatedBy       string  `json:"createdBy,omitempty"      db:"created_by"`
+}
+
+func (f FuelRequest) GetID() string    { return f.ID }
+func (f *FuelRequest) SetID(id string) { f.ID = id }
 
 type TaskLink struct {
 	Type string `json:"type"`

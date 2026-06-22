@@ -128,7 +128,9 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 		Repo: repo, Collection: repo.CargoDocs, Entity: "cargo_doc", IDPrefix: "DOC",
 	}).Register(api, "/cargo-docs")
 
-	handlers.NewFuelRecords(repo, opts.Events).Register(api, "/fuel")
+	fuelRecords := handlers.NewFuelRecords(repo, opts.Events)
+	fuelRecords.Register(api, "/fuel")
+	handlers.NewFuelRequests(repo, opts.Events, fuelRecords).Register(api)
 
 	(&handlers.Resource[models.MaintenanceItem, *models.MaintenanceItem]{
 		Repo: repo, Collection: repo.Maintenance, Entity: "maintenance_item", IDPrefix: "MX",
@@ -150,7 +152,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	handlers.NewComplianceResource(repo).Register(api, "/compliance")
 
-	handlers.NewRequestResource(repo).Register(api, "/requests")
+	handlers.NewRequestResource(repo, opts.Events).Register(api, "/requests")
 
 	(&handlers.Resource[models.TaskItem, *models.TaskItem]{
 		Repo: repo, Collection: repo.Tasks, Entity: "task_item", IDPrefix: "TSK",

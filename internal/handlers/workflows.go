@@ -414,33 +414,28 @@ func (w *Workflows) assignRequest(c *gin.Context) {
 		return
 	}
 
-	if updated.TaskID != "" {
-		_, _ = w.Repo.Tasks.Update(ctx, updated.TaskID, func(t *models.TaskItem) {
-			t.State = "in-progress"
-		})
-	}
+	// Task cascade + assignment event live in one shared helper so this
+	// endpoint and the generic PATCH path can't drift (req is the pre-update
+	// state fetched above for the availability check).
+	requestTransitionEffects(ctx, w.Repo, w.Events, req, updated)
 	w.Repo.LogBest(ctx, "assign", "request", id, "", user)
-	w.emitFleet(ctx, events.TypeServiceRequestAssigned, map[string]string{
-		"requestId": id,
-		"vehicleId": body.VehicleID,
-		"driverId":  body.DriverID,
-	}, id)
 	c.JSON(http.StatusOK, updated)
 }
 
 // requestAdvance moves a service-request along its status machine and
-// cascades the linked task's state in one transaction-equivalent
-// operation. The status→state mapping mirrors what requests/[id]/page.tsx
-// previously did with two separate PATCHes:
+// cascades the linked task's state via requestTransitionEffects (the same
+// helper the generic PATCH path uses, so the two can't drift). The
+// status→state mapping mirrors what requests/[id]/page.tsx previously did
+// with two separate PATCHes:
 //
 //	reviewed  → in-review
 //	approved  → in-progress
 //	completed → done (also stamps task.completedAt)
 //	rejected  → no task change
 //
-// "submitted" is allowed for symmetry but doesn't trigger a cascade.
-// "assigned" is rejected here — that path goes through /assign, which
-// also validates eligibility and stores vehicle/driver fields.
+// "submitted" and "received" are allowed for symmetry but don't trigger a
+// cascade. "assigned" is rejected here — that path goes through /assign,
+// which also validates eligibility and stores vehicle/driver fields.
 type requestAdvanceBody struct {
 	Status string `json:"status" binding:"required"`
 }
@@ -452,7 +447,7 @@ func (w *Workflows) requestAdvance(c *gin.Context) {
 		return
 	}
 	switch body.Status {
-	case "submitted", "reviewed", "approved", "rejected", "completed":
+	case "submitted", "received", "reviewed", "approved", "rejected", "completed":
 		// ok
 	case "assigned":
 		c.JSON(http.StatusBadRequest, gin.H{"error": "use POST /assign for the assigned transition"})
@@ -466,38 +461,26 @@ func (w *Workflows) requestAdvance(c *gin.Context) {
 	ctx := c.Request.Context()
 	user := currentUser(c, w.Repo)
 
+	before, err := w.Repo.Requests.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
 	updated, err := w.Repo.Requests.Update(ctx, id, func(r *models.ServiceRequest) {
 		r.Status = body.Status
+		// Stamp the approver the first time the request reaches "approved".
+		if body.Status == "approved" && before.Status != "approved" {
+			r.ApprovedBy = user
+			r.ApprovedAt = nowISO()
+		}
 	})
 	if err != nil {
 		respondError(c, err)
 		return
 	}
 
-	// Cascade to the linked task. We swallow the inner error: a missing
-	// task or permission shouldn't unwind the request transition the
-	// caller just asked for. The audit log records both attempts.
-	if updated.TaskID != "" {
-		var nextState, completedAt string
-		switch body.Status {
-		case "reviewed":
-			nextState = "in-review"
-		case "approved":
-			nextState = "in-progress"
-		case "completed":
-			nextState = "done"
-			completedAt = nowISO()
-		}
-		if nextState != "" {
-			_, _ = w.Repo.Tasks.Update(ctx, updated.TaskID, func(t *models.TaskItem) {
-				t.State = nextState
-				if completedAt != "" {
-					t.CompletedAt = completedAt
-				}
-			})
-		}
-	}
-
+	requestTransitionEffects(ctx, w.Repo, w.Events, before, updated)
 	w.Repo.LogBest(ctx, "advance:"+body.Status, "request", id, "", user)
 	c.JSON(http.StatusOK, updated)
 }
