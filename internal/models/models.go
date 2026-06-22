@@ -146,6 +146,10 @@ type JMP struct {
 	DispatchStatus     string `json:"dispatchStatus,omitempty"     db:"dispatch_status"`
 	DispatchApprovedBy string `json:"dispatchApprovedBy,omitempty" db:"dispatch_approved_by"`
 	DispatchApprovedAt string `json:"dispatchApprovedAt,omitempty" db:"dispatch_approved_at" dbcast:"timestamptz"`
+	// Decline reasons captured when a gate is rejected (required on decline).
+	// Dispatch and mileage are independent gates, so each keeps its own reason.
+	DispatchRejectReason string `json:"dispatchRejectReason,omitempty" db:"dispatch_reject_reason"`
+	MileageRejectReason  string `json:"mileageRejectReason,omitempty"  db:"mileage_reject_reason"`
 }
 
 func (j JMP) GetID() string    { return j.ID }

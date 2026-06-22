@@ -164,6 +164,9 @@ func (f *FuelRequests) approve(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if declineReasonMissing(c, body.Approved, body.Notes) {
+		return
+	}
 	id := c.Param("id")
 	ctx := c.Request.Context()
 	user := currentUser(c, f.Repo)

@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -187,6 +188,9 @@ func (w *Workflows) approveMileage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if declineReasonMissing(c, body.Approved, body.Notes) {
+		return
+	}
 	id := c.Param("id")
 	ctx := c.Request.Context()
 	user := currentUser(c, w.Repo)
@@ -195,8 +199,10 @@ func (w *Workflows) approveMileage(c *gin.Context) {
 			j.MileageStatus = "Approved"
 			j.ApprovedBy = user
 			j.ApprovedAt = nowISO()
+			j.MileageRejectReason = ""
 		} else {
 			j.MileageStatus = "Rejected"
+			j.MileageRejectReason = strings.TrimSpace(body.Notes)
 		}
 	})
 	if err != nil {
@@ -607,6 +613,18 @@ type approvalDecisionBody struct {
 	Notes    string `json:"notes"`
 }
 
+// declineReasonMissing writes a 400 and returns true when a decline (approved=
+// false) carries no reason. Every approval gate requires a reason on decline so
+// the requester gets actionable feedback and there is an accountability trail;
+// approvals keep the note optional.
+func declineReasonMissing(c *gin.Context, approved bool, notes string) bool {
+	if !approved && strings.TrimSpace(notes) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "a reason is required when declining"})
+		return true
+	}
+	return false
+}
+
 // approveRequest is the dedicated request-approval gate (role:
 // approve_service_request). It moves the request to approved/rejected and
 // stamps the approver, independent of the generic /advance path.
@@ -614,6 +632,9 @@ func (w *Workflows) approveRequest(c *gin.Context) {
 	var body approvalDecisionBody
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if declineReasonMissing(c, body.Approved, body.Notes) {
 		return
 	}
 	id := c.Param("id")
@@ -660,6 +681,9 @@ func (w *Workflows) approveAssignment(c *gin.Context) {
 	var body approvalDecisionBody
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if declineReasonMissing(c, body.Approved, body.Notes) {
 		return
 	}
 	id := c.Param("id")
@@ -712,6 +736,9 @@ func (w *Workflows) approveDispatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if declineReasonMissing(c, body.Approved, body.Notes) {
+		return
+	}
 	id := c.Param("id")
 	ctx := c.Request.Context()
 	user := currentUser(c, w.Repo)
@@ -720,8 +747,10 @@ func (w *Workflows) approveDispatch(c *gin.Context) {
 			j.DispatchStatus = "Approved"
 			j.DispatchApprovedBy = user
 			j.DispatchApprovedAt = nowISO()
+			j.DispatchRejectReason = ""
 		} else {
 			j.DispatchStatus = "Rejected"
+			j.DispatchRejectReason = strings.TrimSpace(body.Notes)
 		}
 	})
 	if err != nil {
