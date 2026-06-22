@@ -238,6 +238,31 @@ func (f *FuelRecords) patch(c *gin.Context) {
 	c.JSON(http.StatusOK, updated)
 }
 
+// CreateRecord validates, enriches, persists, audits, and publishes a fuel
+// record created programmatically rather than from a request body — used when
+// a fuel request is fulfilled. It mirrors the POST /fuel happy path minus JSON
+// binding and the telemetry reconcile (a freshly fulfilled record has no
+// telemetry refuel event to link yet).
+func (f *FuelRecords) CreateRecord(c *gin.Context, rec *models.FuelRecord) (models.FuelRecord, error) {
+	ctx := c.Request.Context()
+	if rec.ID == "" {
+		rec.ID = generateID(f.inner.IDPrefix)
+	}
+	if err := validateFuelRecord(ctx, f.inner.Repo, rec, rec.ID); err != nil {
+		return models.FuelRecord{}, err
+	}
+	if err := f.enrichFuelRecord(ctx, rec, nil); err != nil {
+		return models.FuelRecord{}, err
+	}
+	created, err := f.inner.Collection.Add(ctx, *rec)
+	if err != nil {
+		return models.FuelRecord{}, err
+	}
+	f.inner.Repo.LogBest(ctx, "create", f.inner.Entity, created.ID, "fulfil-request", currentUser(c, f.inner.Repo))
+	f.publishFuel(c, created)
+	return created, nil
+}
+
 func (f *FuelRecords) publishFuel(c *gin.Context, rec models.FuelRecord) {
 	if f.Events == nil || !f.Events.Enabled() || rec.Total <= 0 {
 		return

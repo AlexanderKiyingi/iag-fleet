@@ -15,12 +15,13 @@ var crudEntities = []string{
 	"vehicle", "driver", "jmp", "cargo", "cargo_doc",
 	"maintenance_item", "part", "tyre", "trip",
 	"safety_event", "compliance_item", "service_request",
-	"task_item", "deployment_day", "fuel_record",
+	"task_item", "deployment_day", "fuel_record", "fuel_request",
 	"inspection_template", "vehicle_inspection",
 }
 
 var workflowPermissions = []PermissionDescriptor{
 	{Name: "fleet.approve_mileage_jmp", Description: "Approve JMP mileage claims"},
+	{Name: "fleet.approve_fuel_request", Description: "Approve or reject fuel requests"},
 	{Name: "fleet.complete_toolbox_jmp", Description: "Complete toolbox talk on JMP"},
 	{Name: "fleet.complete_jmp", Description: "Mark an active JMP as completed"},
 	{Name: "fleet.cancel_jmp", Description: "Cancel a JMP"},

@@ -59,7 +59,7 @@ var fleetViewPerms = []string{
 	"view_vehicle", "view_driver", "view_jmp", "view_cargo", "view_cargo_doc",
 	"view_maintenance_item", "view_part", "view_tyre", "view_trip",
 	"view_safety_event", "view_compliance_item", "view_service_request",
-	"view_task_item", "view_deployment_day", "view_fuel_record",
+	"view_task_item", "view_deployment_day", "view_fuel_record", "view_fuel_request",
 	"view_vehicle_inspection", "view_pm_schedule", "view_telemetry",
 }
 

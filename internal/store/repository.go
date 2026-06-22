@@ -40,8 +40,9 @@ type Repository struct {
 	JMPs        *Collection[models.JMP, *models.JMP]
 	Cargo       *Collection[models.Cargo, *models.Cargo]
 	CargoDocs   *Collection[models.CargoDoc, *models.CargoDoc]
-	Fuel        *Collection[models.FuelRecord, *models.FuelRecord]
-	Maintenance *Collection[models.MaintenanceItem, *models.MaintenanceItem]
+	Fuel         *Collection[models.FuelRecord, *models.FuelRecord]
+	FuelRequests *Collection[models.FuelRequest, *models.FuelRequest]
+	Maintenance  *Collection[models.MaintenanceItem, *models.MaintenanceItem]
 	Parts       *Collection[models.Part, *models.Part]
 	Tyres       *Collection[models.Tyre, *models.Tyre]
 	Trips       *Collection[models.Trip, *models.Trip]
@@ -70,8 +71,9 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 		JMPs:        NewCollection[models.JMP, *models.JMP](pool, "jmps"),
 		Cargo:       NewCollection[models.Cargo, *models.Cargo](pool, "cargo"),
 		CargoDocs:   NewCollection[models.CargoDoc, *models.CargoDoc](pool, "cargo_docs"),
-		Fuel:        NewCollection[models.FuelRecord, *models.FuelRecord](pool, "fuel_records"),
-		Maintenance: NewCollection[models.MaintenanceItem, *models.MaintenanceItem](pool, "maintenance_items"),
+		Fuel:         NewCollection[models.FuelRecord, *models.FuelRecord](pool, "fuel_records"),
+		FuelRequests: NewCollection[models.FuelRequest, *models.FuelRequest](pool, "fuel_requests"),
+		Maintenance:  NewCollection[models.MaintenanceItem, *models.MaintenanceItem](pool, "maintenance_items"),
 		Parts:       NewCollection[models.Part, *models.Part](pool, "parts"),
 		Tyres:       NewCollection[models.Tyre, *models.Tyre](pool, "tyres"),
 		Trips:       NewCollection[models.Trip, *models.Trip](pool, "trips"),

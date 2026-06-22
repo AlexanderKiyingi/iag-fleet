@@ -573,6 +573,7 @@ func respondMutationError(c *gin.Context, err error) {
 		return
 	}
 	if errors.Is(err, errDriverEligibility) || errors.Is(err, errInvalidFuelRecord) ||
+		errors.Is(err, errInvalidFuelRequest) ||
 		errors.Is(err, errVehicleNotFound) ||
 		errors.Is(err, errDriverNotFound) || errors.Is(err, errDriverPermitInvalid) ||
 		errors.Is(err, store.ErrNotFound) ||

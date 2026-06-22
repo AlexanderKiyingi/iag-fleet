@@ -55,6 +55,7 @@ var ComplianceStatuses = []string{"valid", "expiring", "expired", "missing"}
 var JmpStatuses = []string{"draft", "pending-toolbox", "active", "completed", "cancelled"}
 var MileageStatuses = []string{"Pending", "Submitted", "Approved", "Rejected", "Disbursed"}
 var RequestStatuses = []string{"submitted", "reviewed", "approved", "assigned", "rejected", "completed"}
+var FuelRequestStatuses = []string{"submitted", "approved", "rejected", "fulfilled", "cancelled"}
 var TaskStates = []string{"open", "in-review", "in-progress", "done"}
 var DeploymentMechStatuses = []string{"operational", "minor-issue", "in-service", "out-of-service", "grounded"}
 var DeploymentStatuses = []string{"deployed", "idle", "under-repair", "demobilised"}

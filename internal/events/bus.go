@@ -45,6 +45,7 @@ const (
 	TypeTelemetryRefuelDetected = "fleet.telemetry.refuel_detected"
 	TypeTelemetryFuelAnomaly    = "fleet.telemetry.fuel_anomaly"
 	TypeServiceRequestAssigned  = "fleet.service_request.assigned"
+	TypeFuelRequestApproved     = "fleet.fuel.request_approved"
 )
 
 type outboxEnqueuer interface {

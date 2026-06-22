@@ -174,8 +174,9 @@ type Snapshot struct {
 	JMPs       []models.JMP             `json:"jmps,omitempty"`
 	Cargo      []models.Cargo           `json:"cargo,omitempty"`
 	CargoDocs  []models.CargoDoc        `json:"cargoDocs,omitempty"`
-	Fuel       []models.FuelRecord      `json:"fuel,omitempty"`
-	Maint      []models.MaintenanceItem `json:"maintenance,omitempty"`
+	Fuel         []models.FuelRecord      `json:"fuel,omitempty"`
+	FuelRequests []models.FuelRequest     `json:"fuelRequests,omitempty"`
+	Maint        []models.MaintenanceItem `json:"maintenance,omitempty"`
 	Parts      []models.Part            `json:"parts,omitempty"`
 	Tyres      []models.Tyre            `json:"tyres,omitempty"`
 	Trips      []models.Trip            `json:"trips,omitempty"`
@@ -205,6 +206,7 @@ func (a *Admin) export(c *gin.Context) {
 		func(ctx context.Context) (err error) { snap.Cargo, err = a.Repo.Cargo.List(ctx); return },
 		func(ctx context.Context) (err error) { snap.CargoDocs, err = a.Repo.CargoDocs.List(ctx); return },
 		func(ctx context.Context) (err error) { snap.Fuel, err = a.Repo.Fuel.List(ctx); return },
+		func(ctx context.Context) (err error) { snap.FuelRequests, err = a.Repo.FuelRequests.List(ctx); return },
 		func(ctx context.Context) (err error) { snap.Maint, err = a.Repo.Maintenance.List(ctx); return },
 		func(ctx context.Context) (err error) { snap.Parts, err = a.Repo.Parts.List(ctx); return },
 		func(ctx context.Context) (err error) { snap.Tyres, err = a.Repo.Tyres.List(ctx); return },
@@ -254,6 +256,7 @@ func (a *Admin) importAll(c *gin.Context) {
 		func() error { if snap.Cargo == nil { return nil }; return a.Repo.Cargo.SetAll(ctx, snap.Cargo) },
 		func() error { if snap.CargoDocs == nil { return nil }; return a.Repo.CargoDocs.SetAll(ctx, snap.CargoDocs) },
 		func() error { if snap.Fuel == nil { return nil }; return a.Repo.Fuel.SetAll(ctx, snap.Fuel) },
+		func() error { if snap.FuelRequests == nil { return nil }; return a.Repo.FuelRequests.SetAll(ctx, snap.FuelRequests) },
 		func() error { if snap.Maint == nil { return nil }; return a.Repo.Maintenance.SetAll(ctx, snap.Maint) },
 		func() error { if snap.Parts == nil { return nil }; return a.Repo.Parts.SetAll(ctx, snap.Parts) },
 		func() error { if snap.Tyres == nil { return nil }; return a.Repo.Tyres.SetAll(ctx, snap.Tyres) },
@@ -311,6 +314,7 @@ func (a *Admin) reset(c *gin.Context) {
 		func() error { return a.Repo.Cargo.SetAll(ctx, nil) },
 		func() error { return a.Repo.CargoDocs.SetAll(ctx, nil) },
 		func() error { return a.Repo.Fuel.SetAll(ctx, nil) },
+		func() error { return a.Repo.FuelRequests.SetAll(ctx, nil) },
 		func() error { return a.Repo.Maintenance.SetAll(ctx, nil) },
 		func() error { return a.Repo.Parts.SetAll(ctx, nil) },
 		func() error { return a.Repo.Tyres.SetAll(ctx, nil) },

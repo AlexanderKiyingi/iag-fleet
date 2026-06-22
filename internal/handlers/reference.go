@@ -41,6 +41,7 @@ func (r *Reference) all(c *gin.Context) {
 		"jmpStatuses":            models.JmpStatuses,
 		"mileageStatuses":        models.MileageStatuses,
 		"requestStatuses":        models.RequestStatuses,
+		"fuelRequestStatuses":    models.FuelRequestStatuses,
 		"taskStates":             models.TaskStates,
 		"deploymentMechStatuses": models.DeploymentMechStatuses,
 		"deploymentStatuses":     models.DeploymentStatuses,
