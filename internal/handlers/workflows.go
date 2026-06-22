@@ -40,6 +40,7 @@ func (w *Workflows) Register(rg *gin.RouterGroup) {
 	rg.POST("/jmps/:id/complete", auth.RequirePerm("complete_jmp"), w.completeJmp)
 	rg.POST("/jmps/:id/cancel", auth.RequirePerm("cancel_jmp"), w.cancelJmp)
 	rg.POST("/jmps/:id/approve-mileage", auth.RequirePerm("approve_mileage_jmp"), w.approveMileage)
+	rg.POST("/jmps/:id/approve-dispatch", auth.RequirePerm("approve_jmp"), w.approveDispatch)
 
 	// Cargo
 	rg.POST("/cargo/:id/set-stage", auth.RequirePerm("advance_stage_cargo"), w.cargoSetStage)
@@ -52,6 +53,10 @@ func (w *Workflows) Register(rg *gin.RouterGroup) {
 	rg.POST("/requests/:id/assign", auth.RequirePerm("assign_request"), w.assignRequest)
 	rg.POST("/requests/:id/advance", auth.RequirePerm("change_service_request"), w.requestAdvance)
 	rg.POST("/requests/:id/create-jmp", auth.RequirePerm("add_jmp"), w.requestCreateJMP)
+	// Dispatch-chain approval gates (independent; each its own role).
+	rg.POST("/requests/:id/approve", auth.RequirePerm("approve_service_request"), w.approveRequest)
+	rg.POST("/requests/:id/approve-assignment", auth.RequirePerm("approve_assignment"), w.approveAssignment)
+	rg.POST("/requests/:id/deploy", auth.RequirePerm("approve_deployment"), w.deployRequest)
 
 	// Tasks
 	rg.POST("/tasks/:id/complete", auth.RequirePerm("complete_task"), w.completeTask)
@@ -551,6 +556,7 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 		ExpectedDays:      expectedDays,
 		ExpectedReturn:    expectedReturn,
 		MileageStatus:     "Pending",
+		DispatchStatus:    "Pending",
 		Toolbox:           models.Toolbox{Completed: false, Items: models.ToolboxItems{}},
 		ConvoyPartner:     "Solo",
 		Status:            "draft",
@@ -586,6 +592,248 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 
 	w.Repo.LogBest(ctx, "create-jmp", "request", req.ID, created.ID, user)
 	c.JSON(http.StatusCreated, created)
+}
+
+// ─────────────────── Dispatch-chain approval gates ──────────────────
+//
+// Four independent gates, each guarded by its own permission so a distinct
+// role can own each one. They don't enforce ordering on each other (the user
+// chose independent approvals); the only constraints are data preconditions
+// (e.g. you can't approve an assignment or deploy before a vehicle/driver is
+// actually assigned).
+
+type approvalDecisionBody struct {
+	Approved bool   `json:"approved"`
+	Notes    string `json:"notes"`
+}
+
+// approveRequest is the dedicated request-approval gate (role:
+// approve_service_request). It moves the request to approved/rejected and
+// stamps the approver, independent of the generic /advance path.
+func (w *Workflows) approveRequest(c *gin.Context) {
+	var body approvalDecisionBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	id := c.Param("id")
+	ctx := c.Request.Context()
+	user := currentUser(c, w.Repo)
+	before, err := w.Repo.Requests.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	updated, err := w.Repo.Requests.Update(ctx, id, func(r *models.ServiceRequest) {
+		if body.Approved {
+			r.Status = "approved"
+			if before.Status != "approved" {
+				r.ApprovedBy = user
+				r.ApprovedAt = nowISO()
+			}
+		} else {
+			r.Status = "rejected"
+		}
+		if body.Notes != "" {
+			r.ReviewerNotes = body.Notes
+		}
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	requestTransitionEffects(ctx, w.Repo, w.Events, before, updated)
+	action := "approve"
+	if !body.Approved {
+		action = "reject"
+	}
+	w.Repo.LogBest(ctx, action, "request", id, body.Notes, user)
+	w.emitFleet(ctx, events.TypeServiceRequestApproved, map[string]string{
+		"requestId": id, "status": updated.Status, "approvedBy": user,
+	}, id)
+	c.JSON(http.StatusOK, updated)
+}
+
+// approveAssignment signs off on the chosen vehicle+driver (role:
+// approve_assignment). Requires only that an assignment exists.
+func (w *Workflows) approveAssignment(c *gin.Context) {
+	var body approvalDecisionBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	id := c.Param("id")
+	ctx := c.Request.Context()
+	user := currentUser(c, w.Repo)
+	existing, err := w.Repo.Requests.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if existing.AssignedVehicleID == "" || existing.AssignedDriverID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "assign a vehicle and driver before approving the assignment"})
+		return
+	}
+	updated, err := w.Repo.Requests.Update(ctx, id, func(r *models.ServiceRequest) {
+		if body.Approved {
+			r.AssignmentApprovedBy = user
+			r.AssignmentApprovedAt = nowISO()
+		} else {
+			r.AssignmentApprovedBy = ""
+			r.AssignmentApprovedAt = ""
+		}
+		if body.Notes != "" {
+			r.ReviewerNotes = body.Notes
+		}
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	action := "approve-assignment"
+	if !body.Approved {
+		action = "reject-assignment"
+	}
+	w.Repo.LogBest(ctx, action, "request", id, body.Notes, user)
+	if body.Approved {
+		w.emitFleet(ctx, events.TypeServiceRequestAssignmentApproved, map[string]string{
+			"requestId": id, "vehicleId": updated.AssignedVehicleID,
+			"driverId": updated.AssignedDriverID, "approvedBy": user,
+		}, id)
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
+// approveDispatch is the pre-trip dispatch approval of a JMP (role:
+// approve_jmp), distinct from the post-trip mileage approval.
+func (w *Workflows) approveDispatch(c *gin.Context) {
+	var body approvalDecisionBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	id := c.Param("id")
+	ctx := c.Request.Context()
+	user := currentUser(c, w.Repo)
+	updated, err := w.Repo.JMPs.Update(ctx, id, func(j *models.JMP) {
+		if body.Approved {
+			j.DispatchStatus = "Approved"
+			j.DispatchApprovedBy = user
+			j.DispatchApprovedAt = nowISO()
+		} else {
+			j.DispatchStatus = "Rejected"
+		}
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	action := "approve-dispatch"
+	if !body.Approved {
+		action = "reject-dispatch"
+	}
+	w.Repo.LogBest(ctx, action, "jmp", id, body.Notes, user)
+	if body.Approved {
+		w.emitFleet(ctx, events.TypeJMPDispatchApproved, map[string]string{
+			"jmpId": id, "approvedBy": user,
+		}, id)
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
+// deployRequest releases the assigned vehicle/driver for the task/journey
+// (role: approve_deployment): it stamps the release on the request and adds a
+// row to today's deployment sheet (creating the day if none has been seeded).
+// Requires only that an assignment exists.
+func (w *Workflows) deployRequest(c *gin.Context) {
+	id := c.Param("id")
+	ctx := c.Request.Context()
+	user := currentUser(c, w.Repo)
+	req, err := w.Repo.Requests.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if req.AssignedVehicleID == "" || req.AssignedDriverID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "assign a vehicle and driver before deploying"})
+		return
+	}
+	if req.DeployedAt != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "request already deployed"})
+		return
+	}
+
+	day, err := w.ensureTodayDeployment(ctx, user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Reuse an existing entry for this vehicle today (no double-deploy), else
+	// append a fresh one.
+	entryID := ""
+	for _, e := range day.Entries {
+		if e.VehicleID == req.AssignedVehicleID {
+			entryID = e.ID
+			break
+		}
+	}
+	if entryID == "" {
+		entry := models.DeploymentEntry{
+			ID:               generateID("DE"),
+			VehicleID:        req.AssignedVehicleID,
+			DriverID:         req.AssignedDriverID,
+			Deployment:       req.Purpose,
+			Location:         req.Destination,
+			MechStatus:       "operational",
+			DeploymentStatus: "deployed",
+		}
+		entryID = entry.ID
+		if _, uErr := w.Repo.Deployment.Update(ctx, day.ID, func(d *models.DeploymentDay) {
+			d.Entries = append(d.Entries, entry)
+		}); uErr != nil {
+			respondError(c, uErr)
+			return
+		}
+	}
+
+	updated, err := w.Repo.Requests.Update(ctx, id, func(r *models.ServiceRequest) {
+		r.DeployedBy = user
+		r.DeployedAt = nowISO()
+		r.DeploymentEntryID = entryID
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	w.Repo.LogBest(ctx, "deploy", "request", id, req.AssignedVehicleID, user)
+	w.emitFleet(ctx, events.TypeServiceRequestDeployed, map[string]string{
+		"requestId": id, "vehicleId": req.AssignedVehicleID,
+		"driverId": req.AssignedDriverID, "deploymentEntryId": entryID, "deployedBy": user,
+	}, id)
+	c.JSON(http.StatusOK, updated)
+}
+
+// ensureTodayDeployment returns today's deployment day, creating an empty one
+// if none has been seeded yet — so deploying a request never requires a prior
+// seed-today call.
+func (w *Workflows) ensureTodayDeployment(ctx context.Context, user string) (models.DeploymentDay, error) {
+	today := time.Now().UTC().Format("2006-01-02")
+	days, err := w.Repo.Deployment.List(ctx)
+	if err != nil {
+		return models.DeploymentDay{}, err
+	}
+	for _, d := range days {
+		if d.Date == today {
+			return d, nil
+		}
+	}
+	return w.Repo.Deployment.Add(ctx, models.DeploymentDay{
+		ID:         generateID("DEP"),
+		Date:       today,
+		CompiledBy: user,
+		Entries:    models.DeploymentEntries{},
+	})
 }
 
 // ───────────────────────────── Tasks ─────────────────────────────

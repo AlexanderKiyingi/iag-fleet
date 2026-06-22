@@ -46,6 +46,11 @@ const (
 	TypeTelemetryFuelAnomaly    = "fleet.telemetry.fuel_anomaly"
 	TypeServiceRequestAssigned  = "fleet.service_request.assigned"
 	TypeFuelRequestApproved     = "fleet.fuel.request_approved"
+	// Dispatch-chain approval gates (independent of one another).
+	TypeServiceRequestApproved           = "fleet.service_request.approved"
+	TypeServiceRequestAssignmentApproved = "fleet.service_request.assignment_approved"
+	TypeJMPDispatchApproved              = "fleet.jmp.dispatch_approved"
+	TypeServiceRequestDeployed           = "fleet.service_request.deployed"
 )
 
 type outboxEnqueuer interface {

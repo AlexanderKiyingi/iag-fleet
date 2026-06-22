@@ -140,6 +140,12 @@ type JMP struct {
 	CompletedAt       string   `json:"completedAt,omitempty"    db:"completed_at"      dbcast:"timestamptz"`
 	ParkingPhotos     []string `json:"parkingPhotos"            db:"parking_photos"`
 	SourceRequestID   string   `json:"sourceRequestId,omitempty" db:"source_request_id"`
+	// DispatchStatus is the pre-trip dispatch approval gate (Pending/Approved/
+	// Rejected), distinct from MileageStatus (the post-trip mileage approval).
+	// Stamped "Pending" at creation; cleared (empty) on historical rows.
+	DispatchStatus     string `json:"dispatchStatus,omitempty"     db:"dispatch_status"`
+	DispatchApprovedBy string `json:"dispatchApprovedBy,omitempty" db:"dispatch_approved_by"`
+	DispatchApprovedAt string `json:"dispatchApprovedAt,omitempty" db:"dispatch_approved_at" dbcast:"timestamptz"`
 }
 
 func (j JMP) GetID() string    { return j.ID }
@@ -442,6 +448,15 @@ type ServiceRequest struct {
 	// generic PATCH path (mirrors the JMP mileage-approval fields).
 	ApprovedBy string `json:"approvedBy,omitempty" db:"approved_by"`
 	ApprovedAt string `json:"approvedAt,omitempty" db:"approved_at" dbcast:"timestamptz"`
+	// Dispatch-chain gates (independent, each its own role). AssignmentApproved*
+	// is the sign-off on the chosen vehicle+driver; Deployed* is the release of
+	// that vehicle for the task/journey (DeploymentEntryID links the row added
+	// to the daily deployment sheet).
+	AssignmentApprovedBy string `json:"assignmentApprovedBy,omitempty" db:"assignment_approved_by"`
+	AssignmentApprovedAt string `json:"assignmentApprovedAt,omitempty" db:"assignment_approved_at" dbcast:"timestamptz"`
+	DeployedBy           string `json:"deployedBy,omitempty"           db:"deployed_by"`
+	DeployedAt           string `json:"deployedAt,omitempty"           db:"deployed_at" dbcast:"timestamptz"`
+	DeploymentEntryID    string `json:"deploymentEntryId,omitempty"    db:"deployment_entry_id"`
 }
 
 func (s ServiceRequest) GetID() string    { return s.ID }
@@ -472,6 +487,10 @@ type FuelRequest struct {
 	ApprovedAt      string  `json:"approvedAt,omitempty"     db:"approved_at"  dbcast:"timestamptz"`
 	FuelRecordID    string  `json:"fuelRecordId,omitempty"   db:"fuel_record_id"`
 	CreatedBy       string  `json:"createdBy,omitempty"      db:"created_by"`
+	// Chain linkage — a fuel request raised for a specific service request
+	// and/or journey plan (empty when raised standalone against a vehicle).
+	RequestID string `json:"requestId,omitempty" db:"request_id"`
+	JmpID     string `json:"jmpId,omitempty"     db:"jmp_id"`
 }
 
 func (f FuelRequest) GetID() string    { return f.ID }
