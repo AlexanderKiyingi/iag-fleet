@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -107,7 +108,7 @@ func (r *Resource[T, PT]) get(c *gin.Context) {
 
 func (r *Resource[T, PT]) create(c *gin.Context) {
 	var item T
-	if err := c.ShouldBindJSON(&item); err != nil {
+	if err := bindJSONCoerced(c, &item); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -139,7 +140,7 @@ func (r *Resource[T, PT]) create(c *gin.Context) {
 // caller can fix that row in their CSV without rerunning everything.
 func (r *Resource[T, PT]) bulkCreate(c *gin.Context) {
 	var items []T
-	if err := c.ShouldBindJSON(&items); err != nil {
+	if err := bindJSONCoercedSlice(c, &items); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -432,7 +433,7 @@ func (r *Resource[T, PT]) bulkDelete(c *gin.Context) {
 
 func (r *Resource[T, PT]) replace(c *gin.Context) {
 	var item T
-	if err := c.ShouldBindJSON(&item); err != nil {
+	if err := bindJSONCoerced(c, &item); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -541,6 +542,13 @@ func mergeJSON[T any](existing T, patch []byte) (T, error) {
 	for k, v := range patchMap {
 		asMap[k] = v
 	}
+	// The Next.js store submits form fields verbatim, so numeric/bool columns
+	// can arrive as JSON strings ({"lat":"0.31"}). Coerce them to the target
+	// struct field's scalar type before the round-trip; otherwise a plain
+	// number column rejects the string with a 400 ("cannot unmarshal string
+	// into Go struct field …"). Genuine string fields and unparseable input
+	// are left untouched, so real bad input still surfaces its error below.
+	coerceScalarStrings(reflect.TypeOf(existing), asMap)
 	out, err := json.Marshal(asMap)
 	if err != nil {
 		return existing, err
@@ -550,6 +558,103 @@ func mergeJSON[T any](existing T, patch []byte) (T, error) {
 		return existing, err
 	}
 	return merged, nil
+}
+
+// coerceScalarStrings rewrites string values in a merged patch map to the
+// scalar Go type of the matching struct field, keyed by json tag. It exists
+// because the frontend submits HTML form values as strings, so numeric and
+// boolean columns (lat, lng, year, fuel, …) can arrive quoted and would
+// otherwise fail the map→struct unmarshal. Only string values whose target
+// field is a numeric/bool kind are touched (pointer fields are unwrapped);
+// genuine string fields, empty strings, and unparseable values are left as-is
+// so legitimately bad input still errors in the caller.
+// bindJSONCoerced decodes a single JSON object request body into dst, first
+// coercing string-encoded numeric/bool fields to dst's scalar field types —
+// the same tolerance mergeJSON applies on PATCH. create (POST) and replace
+// (PUT) bind whole models directly, and the Next.js store submits form values
+// as strings, so without this a body like {"lat":"0.31"} would 400 here even
+// though the equivalent PATCH succeeds. Domain validation still runs in the
+// BeforeCreate/BeforeUpdate hooks; the models carry no gin `binding` tags, so
+// nothing is lost by reading the raw body instead of ShouldBindJSON.
+func bindJSONCoerced[T any](c *gin.Context, dst *T) error {
+	raw, err := c.GetRawData()
+	if err != nil {
+		return err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return err
+	}
+	coerceScalarStrings(reflect.TypeOf(*dst), m)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(out, dst)
+}
+
+// bindJSONCoercedSlice is the array-body form of bindJSONCoerced, used by the
+// bulk-create / CSV-import path so each row gets the same string coercion.
+func bindJSONCoercedSlice[T any](c *gin.Context, dst *[]T) error {
+	raw, err := c.GetRawData()
+	if err != nil {
+		return err
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return err
+	}
+	var zero T
+	rt := reflect.TypeOf(zero)
+	for _, m := range rows {
+		coerceScalarStrings(rt, m)
+	}
+	out, err := json.Marshal(rows)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(out, dst)
+}
+
+func coerceScalarStrings(t reflect.Type, m map[string]any) {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		s, ok := m[name].(string)
+		if !ok || s == "" {
+			continue
+		}
+		ft := t.Field(i).Type
+		for ft.Kind() == reflect.Ptr {
+			ft = ft.Elem()
+		}
+		switch ft.Kind() {
+		case reflect.Float32, reflect.Float64:
+			if v, err := strconv.ParseFloat(s, 64); err == nil {
+				m[name] = v
+			}
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+				m[name] = v
+			}
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if v, err := strconv.ParseUint(s, 10, 64); err == nil {
+				m[name] = v
+			}
+		case reflect.Bool:
+			if v, err := strconv.ParseBool(s); err == nil {
+				m[name] = v
+			}
+		}
+	}
 }
 
 func respondError(c *gin.Context, err error) {
