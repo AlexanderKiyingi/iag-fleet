@@ -70,7 +70,7 @@ func (f *FuelRecords) beforeWrite(c *gin.Context, rec *models.FuelRecord) error 
 
 func (f *FuelRecords) create(c *gin.Context) {
 	var item models.FuelRecord
-	if err := c.ShouldBindJSON(&item); err != nil {
+	if err := bindJSONCoerced(c, &item); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -102,7 +102,7 @@ func (f *FuelRecords) create(c *gin.Context) {
 
 func (f *FuelRecords) bulkCreate(c *gin.Context) {
 	var items []models.FuelRecord
-	if err := c.ShouldBindJSON(&items); err != nil {
+	if err := bindJSONCoercedSlice(c, &items); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

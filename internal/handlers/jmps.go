@@ -53,7 +53,7 @@ func (j *JMPs) normalize(c *gin.Context, jmp *models.JMP) {
 
 func (j *JMPs) create(c *gin.Context) {
 	var item models.JMP
-	if err := c.ShouldBindJSON(&item); err != nil {
+	if err := bindJSONCoerced(c, &item); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -86,7 +86,7 @@ func (j *JMPs) replace(c *gin.Context) {
 	id := c.Param("id")
 	ctx := c.Request.Context()
 	var item models.JMP
-	if err := c.ShouldBindJSON(&item); err != nil {
+	if err := bindJSONCoerced(c, &item); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
