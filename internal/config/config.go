@@ -37,6 +37,15 @@ type Config struct {
 	WarehouseDelegationEnabled bool
 	WarehouseIssueDepartment   string
 	WarehouseIssueFailOpen     bool
+
+	// Procurement integration. When ProcurementIntegrationEnabled is true,
+	// fleet reads back the sourcing requisition procurement imports from an
+	// approved fuel request (origin_system=fleet) so the request detail can
+	// show procurement's approval state. The credentials reuse the same
+	// SERVICE_CLIENT_* / AUTH_TOKEN_URL as warehouse delegation.
+	ProcurementBaseURL            string
+	ProcurementAudience           string
+	ProcurementIntegrationEnabled bool
 }
 
 // Load reads configuration from env. Hard cutover: no AUTH_MODE, no
@@ -67,6 +76,10 @@ func Load() (Config, error) {
 		WarehouseDelegationEnabled: strings.EqualFold(os.Getenv("WAREHOUSE_DELEGATION_ENABLED"), "true"),
 		WarehouseIssueDepartment:   strings.TrimSpace(envOr("WAREHOUSE_ISSUE_DEPARTMENT", "fleet-maintenance")),
 		WarehouseIssueFailOpen:     strings.EqualFold(os.Getenv("WAREHOUSE_ISSUE_FAIL_OPEN"), "true"),
+
+		ProcurementBaseURL:            strings.TrimRight(strings.TrimSpace(envOr("PROCUREMENT_BASE_URL", "http://localhost:4009")), "/"),
+		ProcurementAudience:           strings.TrimSpace(envOr("PROCUREMENT_AUDIENCE", "iag.procurement")),
+		ProcurementIntegrationEnabled: strings.EqualFold(os.Getenv("PROCUREMENT_INTEGRATION_ENABLED"), "true"),
 	}
 	if brokers := strings.TrimSpace(os.Getenv("KAFKA_BROKERS")); brokers != "" {
 		for _, b := range strings.Split(brokers, ",") {
@@ -98,6 +111,14 @@ func (c Config) Validate() error {
 		}
 		if c.ServiceClientSecret == "" {
 			return fmt.Errorf("SERVICE_CLIENT_SECRET is required when WAREHOUSE_DELEGATION_ENABLED=true (needed for service-to-service auth to iag-warehouse)")
+		}
+	}
+	if c.ProcurementIntegrationEnabled {
+		if c.ProcurementBaseURL == "" {
+			return fmt.Errorf("PROCUREMENT_BASE_URL is required when PROCUREMENT_INTEGRATION_ENABLED=true")
+		}
+		if c.ServiceClientSecret == "" {
+			return fmt.Errorf("SERVICE_CLIENT_SECRET is required when PROCUREMENT_INTEGRATION_ENABLED=true (needed for service-to-service auth to iag-procurement)")
 		}
 	}
 	if c.IsProduction() {

@@ -11,6 +11,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/models"
+	"github.com/iag/fleet-tool/backend/internal/procurementclient"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
 
@@ -22,17 +23,20 @@ var errInvalidFuelRequest = errors.New("invalid fuel request")
 // place). Modelled on the FuelRecords handler — it owns a generic Resource for
 // CRUD and layers the workflow transitions on the same route group.
 type FuelRequests struct {
-	inner   Resource[models.FuelRequest, *models.FuelRequest]
-	Repo    *store.Repository
-	Events  *events.Bus
-	records *FuelRecords
+	inner       Resource[models.FuelRequest, *models.FuelRequest]
+	Repo        *store.Repository
+	Events      *events.Bus
+	records     *FuelRecords
+	procurement *procurementclient.Client
 }
 
 // NewFuelRequests wires the handler. records is the same *FuelRecords mounted
 // at /fuel; fulfilment delegates record creation to it so validation,
 // odometer checks, anomaly enrichment, and the finance event are not
-// duplicated here.
-func NewFuelRequests(repo *store.Repository, bus *events.Bus, records *FuelRecords) *FuelRequests {
+// duplicated here. procurement is the optional iag-procurement client (nil when
+// the integration is disabled) used to reconcile a request against the sourcing
+// requisition procurement imports from the approval event.
+func NewFuelRequests(repo *store.Repository, bus *events.Bus, records *FuelRecords, procurement *procurementclient.Client) *FuelRequests {
 	f := &FuelRequests{
 		inner: Resource[models.FuelRequest, *models.FuelRequest]{
 			Repo:       repo,
@@ -40,9 +44,10 @@ func NewFuelRequests(repo *store.Repository, bus *events.Bus, records *FuelRecor
 			Entity:     "fuel_request",
 			IDPrefix:   "FREQ",
 		},
-		Repo:    repo,
-		Events:  bus,
-		records: records,
+		Repo:        repo,
+		Events:      bus,
+		records:     records,
+		procurement: procurement,
 	}
 	f.inner.BeforeCreate = f.beforeCreate
 	f.inner.BeforeUpdate = f.beforeUpdate
@@ -59,7 +64,7 @@ func (f *FuelRequests) Register(rg *gin.RouterGroup) {
 
 	g.GET("", view, f.inner.list)
 	g.GET("/search", view, f.inner.search)
-	g.GET("/:id", view, f.inner.get)
+	g.GET("/:id", view, f.get)
 	g.POST("", add, f.inner.create)
 	g.POST("/bulk", add, f.inner.bulkCreate)
 	g.PUT("/:id", change, f.inner.replace)
@@ -74,6 +79,27 @@ func (f *FuelRequests) Register(rg *gin.RouterGroup) {
 	// Fulfilment writes a fuel_record, so it's gated on add_fuel_record —
 	// the same permission a direct POST /fuel requires.
 	g.POST("/:id/fulfill", auth.RequirePerm("add_fuel_record"), f.fulfill)
+}
+
+// get returns one fuel request. When the procurement integration is enabled it
+// best-effort enriches the response with the sourcing requisition procurement
+// imported for this request (origin_ref = request id), so the detail view can
+// show procurement's approval state. A missing or unreachable procurement is
+// non-fatal — the request is returned without the procurement fields.
+func (f *FuelRequests) get(c *gin.Context) {
+	id := c.Param("id")
+	rec, err := f.Repo.FuelRequests.Get(c.Request.Context(), id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if f.procurement != nil {
+		if req, perr := f.procurement.GetRequisitionByOrigin(c.Request.Context(), id); perr == nil {
+			rec.ProcurementRequisitionID = req.ID
+			rec.ProcurementStatus = req.Status
+		}
+	}
+	c.JSON(http.StatusOK, rec)
 }
 
 func (f *FuelRequests) beforeCreate(c *gin.Context, rec *models.FuelRequest) error {
@@ -309,10 +335,21 @@ func (f *FuelRequests) emitApproved(ctx context.Context, req models.FuelRequest,
 	if f.Events == nil || !f.Events.Enabled() {
 		return
 	}
+	// Payload is enriched (litres/estTotal/currency/station/requester/dept) so a
+	// downstream consumer — procurement's fleet-fuel bridge — can turn an
+	// approved fuel request into a sourcing requisition without a callback.
+	// Numbers are formatted as strings to match the fleet.fuel.recorded shape.
 	f.Events.PublishFleet(ctx, events.TypeFuelRequestApproved, events.FleetEventData(map[string]string{
 		"requestId":  req.ID,
 		"vehicleId":  req.VehicleID,
 		"status":     req.Status,
 		"approvedBy": user,
+		"litres":     fmt.Sprintf("%.2f", req.RequestedLitres),
+		"estTotal":   fmt.Sprintf("%.2f", req.EstTotal),
+		"currency":   envOr("FLEET_FUEL_CURRENCY", "UGX"),
+		"station":    req.Station,
+		"requester":  req.RequesterName,
+		"dept":       req.RequesterDept,
+		"purpose":    req.Purpose,
 	}), req.ID, req.ID)
 }

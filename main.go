@@ -31,6 +31,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/outbox"
 	"github.com/iag/fleet-tool/backend/internal/platform"
 	"github.com/iag/fleet-tool/backend/internal/platformregister"
+	"github.com/iag/fleet-tool/backend/internal/procurementclient"
 	"github.com/iag/fleet-tool/backend/internal/router"
 	"github.com/iag/fleet-tool/backend/internal/store"
 	"github.com/iag/fleet-tool/backend/internal/warehouseclient"
@@ -187,6 +188,20 @@ func main() {
 		}
 	}
 
+	// Procurement integration: build the outbound client only when enabled.
+	// Config.Validate has already ensured the credentials are present.
+	var procurementClient *procurementclient.Client
+	if cfg.ProcurementIntegrationEnabled {
+		procurementClient = procurementclient.New(procurementclient.Options{
+			BaseURL:      cfg.ProcurementBaseURL,
+			Audience:     cfg.ProcurementAudience,
+			TokenURL:     cfg.AuthTokenURL,
+			ClientID:     cfg.ServiceClientID,
+			ClientSecret: cfg.ServiceClientSecret,
+		})
+		slog.Info("procurement integration enabled", "procurement", cfg.ProcurementBaseURL, "audience", cfg.ProcurementAudience)
+	}
+
 	go platformregister.PermissionsLoop(context.Background(), cfg)
 
 	r := router.New(repo, router.Options{
@@ -204,6 +219,7 @@ func main() {
 		NotificationsBroker: notifBroker,
 		Events:              eventBus,
 		Warehouse:           warehouseClient,
+		Procurement:         procurementClient,
 	})
 
 	notifCtx, cancelNotif := context.WithCancel(context.Background())

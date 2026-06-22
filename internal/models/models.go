@@ -491,6 +491,13 @@ type FuelRequest struct {
 	// and/or journey plan (empty when raised standalone against a vehicle).
 	RequestID string `json:"requestId,omitempty" db:"request_id"`
 	JmpID     string `json:"jmpId,omitempty"     db:"jmp_id"`
+
+	// Procurement reconciliation (transient, db:"-"): when the procurement
+	// integration is enabled, GET /fuel-requests/:id enriches these from the
+	// sourcing requisition procurement imported for this request (origin_ref =
+	// this id). Not persisted — procurement remains the system of record.
+	ProcurementRequisitionID string `json:"procurementRequisitionId,omitempty" db:"-"`
+	ProcurementStatus        string `json:"procurementStatus,omitempty"        db:"-"`
 }
 
 func (f FuelRequest) GetID() string    { return f.ID }

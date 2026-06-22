@@ -11,16 +11,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/cache"
 	"github.com/iag/fleet-tool/backend/internal/config"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/handlers"
-	"github.com/iag/fleet-iot/iot"
 	fleetmw "github.com/iag/fleet-tool/backend/internal/middleware"
 	"github.com/iag/fleet-tool/backend/internal/models"
-	"github.com/iag/fleet-tool/backend/internal/platform"
 	"github.com/iag/fleet-tool/backend/internal/notifications"
+	"github.com/iag/fleet-tool/backend/internal/platform"
+	"github.com/iag/fleet-tool/backend/internal/procurementclient"
 	"github.com/iag/fleet-tool/backend/internal/security"
 	"github.com/iag/fleet-tool/backend/internal/store"
 	"github.com/iag/fleet-tool/backend/internal/warehouseclient"
@@ -39,9 +40,9 @@ type Options struct {
 	// Cache is optional response cache (Redis or [cache.NoOp]). Never nil after [New].
 	Cache cache.Cache
 	// TTLs apply when Cache is Redis; NoOp ignores them.
-	TTLDashboard  time.Duration
-	TTLAnalytics  time.Duration
-	TTLReference  time.Duration
+	TTLDashboard time.Duration
+	TTLAnalytics time.Duration
+	TTLReference time.Duration
 	// NotificationsBroker is the in-process pubsub the producer publishes
 	// to and the SSE handler subscribes from. nil falls back to a no-op
 	// broker so the routes still register (handy for tests that don't
@@ -51,7 +52,11 @@ type Options struct {
 	// Warehouse is the outbound iag-warehouse client. nil when stock
 	// delegation is disabled.
 	Warehouse *warehouseclient.Client
-	Platform            platform.Services
+	// Procurement is the outbound iag-procurement client. nil when the
+	// procurement integration is disabled; fuel-request reads then skip the
+	// procurement-status enrichment.
+	Procurement *procurementclient.Client
+	Platform    platform.Services
 }
 
 // New builds the gin engine, attaches middleware, and registers all routes.
@@ -130,7 +135,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	fuelRecords := handlers.NewFuelRecords(repo, opts.Events)
 	fuelRecords.Register(api, "/fuel")
-	handlers.NewFuelRequests(repo, opts.Events, fuelRecords).Register(api)
+	handlers.NewFuelRequests(repo, opts.Events, fuelRecords, opts.Procurement).Register(api)
 
 	(&handlers.Resource[models.MaintenanceItem, *models.MaintenanceItem]{
 		Repo: repo, Collection: repo.Maintenance, Entity: "maintenance_item", IDPrefix: "MX",
