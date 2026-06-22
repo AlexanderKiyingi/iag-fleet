@@ -591,6 +591,10 @@ type InspectionTemplate struct {
 	Active    bool                `json:"active"          db:"active"`
 	Notes     string              `json:"notes,omitempty" db:"notes"`
 	CreatedAt string              `json:"createdAt"       db:"created_at" dbcast:"timestamptz"`
+	// VehicleType scopes a template to a vehicle class (e.g. "Tipper truck").
+	// Optional; the DVIR UI reads it to label/filter templates. Appended last
+	// to match the column added by migration 0028.
+	VehicleType string `json:"vehicleType,omitempty" db:"vehicle_type"`
 }
 
 func (t InspectionTemplate) GetID() string    { return t.ID }
