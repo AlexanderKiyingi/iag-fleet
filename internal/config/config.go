@@ -46,6 +46,14 @@ type Config struct {
 	ProcurementBaseURL            string
 	ProcurementAudience           string
 	ProcurementIntegrationEnabled bool
+
+	// GateOrderingEnabled turns on SOFT status-ordering for the dispatch chain
+	// and the JMP gates: out-of-order transitions (deploy before approval,
+	// approving an assignment before the request is approved, completing or
+	// approving mileage on a JMP whose dispatch was rejected) return 409 —
+	// unless the caller holds the gate-override permission, in which case the
+	// bypass is audit-logged. Off by default: gates stay independent until set.
+	GateOrderingEnabled bool
 }
 
 // Load reads configuration from env. Hard cutover: no AUTH_MODE, no
@@ -80,6 +88,8 @@ func Load() (Config, error) {
 		ProcurementBaseURL:            strings.TrimRight(strings.TrimSpace(envOr("PROCUREMENT_BASE_URL", "http://localhost:4009")), "/"),
 		ProcurementAudience:           strings.TrimSpace(envOr("PROCUREMENT_AUDIENCE", "iag.procurement")),
 		ProcurementIntegrationEnabled: strings.EqualFold(os.Getenv("PROCUREMENT_INTEGRATION_ENABLED"), "true"),
+
+		GateOrderingEnabled: strings.EqualFold(os.Getenv("GATE_ORDERING_ENABLED"), "true"),
 	}
 	if brokers := strings.TrimSpace(os.Getenv("KAFKA_BROKERS")); brokers != "" {
 		for _, b := range strings.Split(brokers, ",") {

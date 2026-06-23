@@ -155,6 +155,10 @@ func (w *Workflows) completeJmp(c *gin.Context) {
 		})
 		return
 	}
+	if !w.gateOrder(c, existing.DispatchStatus != "Rejected", "jmp", id, "complete",
+		"dispatch was rejected — this journey cannot be completed") {
+		return
+	}
 	updated, err := w.Repo.JMPs.Update(ctx, id, func(j *models.JMP) {
 		j.Status = "completed"
 		j.CompletedAt = nowISO()
@@ -194,6 +198,15 @@ func (w *Workflows) approveMileage(c *gin.Context) {
 	id := c.Param("id")
 	ctx := c.Request.Context()
 	user := currentUser(c, w.Repo)
+	existing, err := w.Repo.JMPs.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if !w.gateOrder(c, existing.DispatchStatus != "Rejected", "jmp", id, "approve-mileage",
+		"dispatch was rejected — mileage cannot be approved for this journey") {
+		return
+	}
 	updated, err := w.Repo.JMPs.Update(ctx, id, func(j *models.JMP) {
 		if body.Approved {
 			j.MileageStatus = "Approved"
@@ -625,6 +638,31 @@ func declineReasonMissing(c *gin.Context, approved bool, notes string) bool {
 	return false
 }
 
+// gateOverridePerm lets a privileged principal bypass a status-ordering gate —
+// e.g. a duty manager forcing an emergency out-of-order dispatch. The bypass is
+// always audit-logged.
+const gateOverridePerm = "override_gate_order"
+
+// gateOrder enforces a SOFT status-ordering precondition (config.GateOrderingEnabled).
+// It returns true — the transition may proceed — when ordering is disabled, when
+// `satisfied` already holds, or when the caller holds gateOverridePerm (that last
+// case is recorded as a "gate-override:<action>" audit entry). Otherwise it writes
+// a 409 and returns false. `action` labels the gate in the audit trail and the
+// error payload. Preconditions read off the approval STAMP fields (ApprovedAt,
+// AssignmentApprovedAt, DispatchStatus), not Status, because /assign and /approve
+// overwrite Status — the stamps are the durable per-gate signal.
+func (w *Workflows) gateOrder(c *gin.Context, satisfied bool, entity, id, action, msg string) bool {
+	if satisfied || !w.Config.GateOrderingEnabled {
+		return true
+	}
+	if auth.HasPerm(c, gateOverridePerm) {
+		w.Repo.LogBest(c.Request.Context(), "gate-override:"+action, entity, id, msg, currentUser(c, w.Repo))
+		return true
+	}
+	c.JSON(http.StatusConflict, gin.H{"error": msg, "gate": action})
+	return false
+}
+
 // approveRequest is the dedicated request-approval gate (role:
 // approve_service_request). It moves the request to approved/rejected and
 // stamps the approver, independent of the generic /advance path.
@@ -696,6 +734,10 @@ func (w *Workflows) approveAssignment(c *gin.Context) {
 	}
 	if existing.AssignedVehicleID == "" || existing.AssignedDriverID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "assign a vehicle and driver before approving the assignment"})
+		return
+	}
+	if !w.gateOrder(c, existing.ApprovedAt != "", "request", id, "approve-assignment",
+		"request must be approved before its assignment can be signed off") {
 		return
 	}
 	updated, err := w.Repo.Requests.Update(ctx, id, func(r *models.ServiceRequest) {
@@ -789,6 +831,10 @@ func (w *Workflows) deployRequest(c *gin.Context) {
 	}
 	if req.DeployedAt != "" {
 		c.JSON(http.StatusConflict, gin.H{"error": "request already deployed"})
+		return
+	}
+	if !w.gateOrder(c, req.ApprovedAt != "" && req.AssignmentApprovedAt != "", "request", id, "deploy",
+		"request must be approved and its assignment signed off before deployment") {
 		return
 	}
 
