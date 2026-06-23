@@ -79,6 +79,92 @@ func (f *FuelRequests) Register(rg *gin.RouterGroup) {
 	// Fulfilment writes a fuel_record, so it's gated on add_fuel_record —
 	// the same permission a direct POST /fuel requires.
 	g.POST("/:id/fulfill", auth.RequirePerm("add_fuel_record"), f.fulfill)
+
+	// Raise a fuel request anchored to a service (vehicle) request, inheriting
+	// its assignment. Mounted on the parent group alongside the other
+	// /requests/:id/* dispatch-chain workflows (assign, create-jmp, deploy).
+	rg.POST("/requests/:id/request-fuel", add, f.createFromRequest)
+}
+
+// createFromRequestBody carries the fuel-specific fields the service request
+// doesn't hold; vehicle/driver/requester/purpose are inherited from the request.
+type createFromRequestBody struct {
+	RequestedLitres float64 `json:"requestedLitres"`
+	EstUnitPrice    float64 `json:"estUnitPrice"`
+	Station         string  `json:"station"`
+	Urgency         string  `json:"urgency"`
+	Purpose         string  `json:"purpose"`
+	Notes           string  `json:"notes"`
+}
+
+// createFromRequest raises a fuel request for a service request's assigned
+// vehicle (mirrors POST /requests/:id/create-jmp). The request must have a
+// vehicle assigned; the fuel request inherits it plus the driver/requester
+// context and back-links via requestId (and the request's jmpId when present).
+func (f *FuelRequests) createFromRequest(c *gin.Context) {
+	id := c.Param("id")
+	ctx := c.Request.Context()
+
+	req, err := f.Repo.Requests.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if req.AssignedVehicleID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "assign a vehicle before requesting fuel"})
+		return
+	}
+
+	// Body is optional — fuel-specific fields default to zero/empty and are
+	// validated by the shared create path (litres must be positive).
+	var body createFromRequestBody
+	_ = c.ShouldBindJSON(&body)
+
+	purpose := req.Purpose
+	if body.Purpose != "" {
+		purpose = body.Purpose
+	}
+	rec := models.FuelRequest{
+		VehicleID:       req.AssignedVehicleID,
+		DriverID:        req.AssignedDriverID,
+		RequesterName:   req.RequesterName,
+		RequesterDept:   req.RequesterDept,
+		RequestedLitres: body.RequestedLitres,
+		EstUnitPrice:    body.EstUnitPrice,
+		Station:         body.Station,
+		Urgency:         body.Urgency,
+		Purpose:         purpose,
+		Notes:           body.Notes,
+		RequestID:       req.ID,
+		JmpID:           req.JmpID,
+	}
+
+	created, err := f.CreateRequest(c, &rec)
+	if err != nil {
+		respondMutationError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, created)
+}
+
+// CreateRequest assigns an id, runs the standard create hooks (defaults, link
+// enrichment, validation), persists, and audits — the shared path the generic
+// POST and the from-request endpoint both go through, mirroring
+// FuelRecords.CreateRecord.
+func (f *FuelRequests) CreateRequest(c *gin.Context, rec *models.FuelRequest) (models.FuelRequest, error) {
+	if rec.ID == "" {
+		rec.ID = generateID(f.inner.IDPrefix)
+	}
+	if err := f.beforeCreate(c, rec); err != nil {
+		return models.FuelRequest{}, err
+	}
+	created, err := f.inner.Collection.Add(c.Request.Context(), *rec)
+	if err != nil {
+		return models.FuelRequest{}, err
+	}
+	f.Repo.LogBest(c.Request.Context(), "create", f.inner.Entity, created.ID,
+		"from-request:"+rec.RequestID, currentUser(c, f.Repo))
+	return created, nil
 }
 
 // get returns one fuel request. When the procurement integration is enabled it
@@ -110,13 +196,74 @@ func (f *FuelRequests) beforeCreate(c *gin.Context, rec *models.FuelRequest) err
 	if rec.SubmittedAt == "" {
 		rec.SubmittedAt = nowISO()
 	}
-	if rec.RequesterName == "" {
-		rec.RequesterName = user
-	}
 	if rec.CreatedBy == "" {
 		rec.CreatedBy = user
 	}
+	// Resolve the service-request / JMP link first so any inherited requester
+	// wins over the fallback below.
+	if err := f.linkToServiceRequest(c.Request.Context(), rec); err != nil {
+		return err
+	}
+	if rec.RequesterName == "" {
+		rec.RequesterName = user
+	}
 	return f.validate(c.Request.Context(), rec)
+}
+
+// linkToServiceRequest validates and enriches a fuel request from the service
+// request / journey plan it references. Linking is OPTIONAL: a request with no
+// requestId/jmpId is a standalone request against a vehicle and passes through
+// unchanged. When a link IS given it must resolve, and the fuel request inherits
+// the assigned vehicle/driver and requester/purpose context when those fields
+// were left blank — so a fuel request raised "for request X" can't drift from
+// X's assignment. A vehicle that contradicts the linked assignment is rejected.
+func (f *FuelRequests) linkToServiceRequest(ctx context.Context, rec *models.FuelRequest) error {
+	if rec.RequestID != "" {
+		req, err := f.Repo.Requests.Get(ctx, rec.RequestID)
+		if err != nil {
+			return fmt.Errorf("%w: source request %q not found", errInvalidFuelRequest, rec.RequestID)
+		}
+		if rec.VehicleID == "" {
+			rec.VehicleID = req.AssignedVehicleID
+		}
+		if rec.DriverID == "" {
+			rec.DriverID = req.AssignedDriverID
+		}
+		if rec.RequesterName == "" {
+			rec.RequesterName = req.RequesterName
+		}
+		if rec.RequesterDept == "" {
+			rec.RequesterDept = req.RequesterDept
+		}
+		if rec.Purpose == "" {
+			rec.Purpose = req.Purpose
+		}
+		if req.AssignedVehicleID != "" && rec.VehicleID != req.AssignedVehicleID {
+			return fmt.Errorf("%w: vehicle %q does not match request %s assignment %q",
+				errInvalidFuelRequest, rec.VehicleID, req.ID, req.AssignedVehicleID)
+		}
+		// Default the JMP link to the request's journey plan when it has one.
+		if rec.JmpID == "" && req.JmpID != "" {
+			rec.JmpID = req.JmpID
+		}
+	}
+	if rec.JmpID != "" {
+		jmp, err := f.Repo.JMPs.Get(ctx, rec.JmpID)
+		if err != nil {
+			return fmt.Errorf("%w: source journey plan %q not found", errInvalidFuelRequest, rec.JmpID)
+		}
+		if rec.VehicleID == "" {
+			rec.VehicleID = jmp.VehicleID
+		}
+		if rec.DriverID == "" {
+			rec.DriverID = jmp.DriverID
+		}
+		if jmp.VehicleID != "" && rec.VehicleID != jmp.VehicleID {
+			return fmt.Errorf("%w: vehicle %q does not match journey plan %s vehicle %q",
+				errInvalidFuelRequest, rec.VehicleID, jmp.ID, jmp.VehicleID)
+		}
+	}
+	return nil
 }
 
 // beforeUpdate guards direct PATCH/PUT edits. Status transitions must go
@@ -354,5 +501,9 @@ func (f *FuelRequests) emitApproved(ctx context.Context, req models.FuelRequest,
 		"requester":  req.RequesterName,
 		"dept":       req.RequesterDept,
 		"purpose":    req.Purpose,
+		// Chain linkage so consumers (and the audit trail) can tie the spend
+		// back to the vehicle request / journey plan it was raised against.
+		"serviceRequestId": req.RequestID,
+		"jmpId":            req.JmpID,
 	}), req.ID, req.ID)
 }
