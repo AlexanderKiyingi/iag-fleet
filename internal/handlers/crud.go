@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/events"
+	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
 
@@ -49,6 +50,15 @@ type Resource[T any, PT store.IdentifiablePtr[T]] struct {
 
 func (r *Resource[T, PT]) Register(rg *gin.RouterGroup, base string) {
 	g := rg.Group(base)
+	// Fail fast at startup if this entity's CRUD permissions are not in the
+	// registered catalogue: an enforced-but-unseeded permission can never be
+	// granted, so the routes would 403 forever. Surfacing it here (panic on
+	// boot / in router tests) beats a silent permanent denial in production.
+	for _, verb := range []string{"view_", "add_", "change_", "delete_"} {
+		if !models.IsCatalogued(verb + r.Entity) {
+			panic(fmt.Sprintf("fleet: CRUD resource %q enforces uncatalogued permission %q — add %q to models.crudEntities", r.Entity, verb+r.Entity, r.Entity))
+		}
+	}
 	view := auth.RequirePerm("view_" + r.Entity)
 	add := auth.RequirePerm("add_" + r.Entity)
 	change := auth.RequirePerm("change_" + r.Entity)

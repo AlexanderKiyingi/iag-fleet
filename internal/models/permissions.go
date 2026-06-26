@@ -11,12 +11,17 @@ type PermissionDescriptor struct {
 	Description string
 }
 
+// crudEntities drive the generic view/add/change/delete permission set. Every
+// entity registered as a CRUD Resource (handlers.Resource.Entity) MUST appear
+// here, otherwise its routes enforce a permission that is never seeded and the
+// routes 403 permanently. handlers.Resource.Register fail-fasts on a mismatch,
+// and TestCRUDEntitiesYieldFullVerbSet guards the catalogue side.
 var crudEntities = []string{
 	"vehicle", "driver", "jmp", "cargo", "cargo_doc",
 	"maintenance_item", "part", "tyre", "trip",
 	"safety_event", "compliance_item", "service_request",
 	"task_item", "deployment_day", "fuel_record", "fuel_request",
-	"inspection_template", "vehicle_inspection",
+	"inspection_template", "vehicle_inspection", "pm_schedule",
 }
 
 var workflowPermissions = []PermissionDescriptor{
@@ -42,10 +47,7 @@ var workflowPermissions = []PermissionDescriptor{
 	{Name: "fleet.manage_iot_device", Description: "Manage IoT devices"},
 	{Name: "fleet.view_notification", Description: "View in-app notifications"},
 	{Name: "fleet.change_notification", Description: "Update notification state"},
-	{Name: "fleet.view_pm_schedule", Description: "View PM schedules"},
-	{Name: "fleet.add_pm_schedule", Description: "Create PM schedules"},
-	{Name: "fleet.change_pm_schedule", Description: "Update PM schedules"},
-	{Name: "fleet.delete_pm_schedule", Description: "Delete PM schedules"},
+	// pm_schedule view/add/change/delete come from the generic crudEntities set.
 	{Name: "fleet.view_operator_ticker", Description: "View operator ticker"},
 	{Name: "fleet.change_operator_ticker", Description: "Update operator ticker"},
 	{Name: "fleet.view_audit_entry", Description: "View fleet audit log"},
@@ -74,4 +76,26 @@ func PermissionDescriptors() []PermissionDescriptor {
 	}
 	out = append(out, workflowPermissions...)
 	return out
+}
+
+// CRUDEntities returns the entities that get a generic view/add/change/delete
+// permission set. Kept as the single source of truth for CRUD route entities.
+func CRUDEntities() []string {
+	return append([]string(nil), crudEntities...)
+}
+
+// IsCatalogued reports whether a permission codename is in the registered
+// catalogue, accepting either the prefixed form ("fleet.view_vehicle") or the
+// legacy unprefixed alias ("view_vehicle") that API handlers enforce.
+func IsCatalogued(codename string) bool {
+	name := codename
+	if !strings.HasPrefix(name, "fleet.") {
+		name = "fleet." + name
+	}
+	for _, d := range PermissionDescriptors() {
+		if d.Name == name {
+			return true
+		}
+	}
+	return false
 }
