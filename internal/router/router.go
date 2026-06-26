@@ -111,7 +111,12 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// small dispatcher (gin doesn't let us reassign middleware after a
 	// handler is registered, so we declare a tier middleware that picks
 	// the right limiter by path).
-	r.Use(perRouteRateLimits(map[string]gin.HandlerFunc{}, security.RateLimit(300, 60, security.ByIP)))
+	r.Use(perRouteRateLimits(map[string]gin.HandlerFunc{
+		// Driver phones self-report GPS frequently while moving; give the route
+		// its own bucket (~2/s sustained, burst 20) so a chatty app doesn't trip
+		// the fleet-wide limiter, but a runaway client still gets capped.
+		"/api/me/location": security.RateLimit(120, 20, security.ByIP),
+	}, security.RateLimit(300, 60, security.ByIP)))
 
 	(&handlers.Platform{Repo: repo}).Register(api)
 	(&handlers.PlatformStatus{Services: opts.Platform}).Register(api)

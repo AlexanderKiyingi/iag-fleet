@@ -33,6 +33,7 @@ type Driver struct {
 	YearsExp          int     `json:"yearsExp"                    db:"years_exp"`
 	VehicleID         string  `json:"vehicleId,omitempty"         db:"vehicle_id"`
 	CurrentAssignment string  `json:"currentAssignment,omitempty" db:"current_assignment"`
+	PlatformUserID    string  `json:"platformUserId,omitempty"    db:"platform_user_id" dbcast:"uuid"`
 	HomeRegion        string  `json:"homeRegion"                  db:"home_region"`
 	Rating            float64 `json:"rating"                      db:"rating"`
 	SafetyScore       float64 `json:"safetyScore"                 db:"safety_score"`
@@ -68,6 +69,7 @@ type Vehicle struct {
 	Lat                float64  `json:"lat"                      db:"lat"`
 	Lng                float64  `json:"lng"                      db:"lng"`
 	Heading            float64  `json:"heading"                  db:"heading"`
+	LastFixSource      string   `json:"lastFixSource"            db:"last_fix_source"`
 	Fuel               float64  `json:"fuel"                     db:"fuel"`
 	Odo                float64  `json:"odo"                      db:"odo"`
 	Capacity           string   `json:"capacity"                 db:"capacity"`

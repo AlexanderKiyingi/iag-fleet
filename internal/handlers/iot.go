@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -72,6 +73,11 @@ func (h *IoT) Register(rg *gin.RouterGroup) {
 
 	// Operator-facing ingestion contract (URLs + limits + sample JSON) for relays and scripts.
 	rg.GET("/iot/ingestion", auth.RequirePerm("manage_iot_device"), h.requireStore, h.ingestionGuide)
+
+	// Driver companion-app self-report: the driver's phone posts its GPS while on
+	// an active journey. Authenticated by the driver's platform JWT (no device
+	// key); the vehicle is resolved from the driver's active JMP, not the body.
+	rg.POST("/me/location", auth.RequireUser(), h.requireStore, h.driverLocation)
 
 	rg.GET("/vehicles/:id/track", auth.RequirePerm("view_telemetry"), h.requireStore, h.track)
 	rg.GET("/vehicles/:id/track/latest", auth.RequirePerm("view_telemetry"), h.requireStore, h.latest)
@@ -344,6 +350,241 @@ func (h *IoT) testPing(c *gin.Context) {
 		"vehicleId": d.VehicleID,
 		"ping":      latest,
 	})
+}
+
+// ─────────────────────── Driver companion-app GPS ──────────────────────
+
+type driverLocationBody struct {
+	Lat      float64  `json:"lat"`
+	Lng      float64  `json:"lng"`
+	Heading  *float64 `json:"heading,omitempty"`
+	SpeedKmh *float64 `json:"speedKmh,omitempty"`
+	Accuracy *float64 `json:"accuracy,omitempty"` // GPS accuracy in metres; carried in raw
+	TS       *string  `json:"ts,omitempty"`       // RFC3339; defaults to now()
+}
+
+var (
+	errNoDriverProfile    = errors.New("no driver profile linked to this account")
+	errNoActiveAssignment = errors.New("no active assignment")
+)
+
+// driverLocation ingests one GPS fix self-reported by a driver's phone. The
+// driver is identified by their platform JWT; the target vehicle is the one on
+// their active journey (JMP). It reuses the exact device-ingest pipeline
+// (InsertPings → ApplyVehicleHotState → Hub.Publish → geofences) so the vehicle
+// registry position stays fresh exactly as it does for hardware trackers.
+func (h *IoT) driverLocation(c *gin.Context) {
+	if h.Repo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "repository not configured"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	vehicleID, err := h.resolveDriverActiveVehicle(ctx, c)
+	if err != nil {
+		switch {
+		case errors.Is(err, errNoDriverProfile):
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		case errors.Is(err, errNoActiveAssignment):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	var body driverLocationBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.Lat < -90 || body.Lat > 90 || body.Lng < -180 || body.Lng > 180 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lat/lng out of range"})
+		return
+	}
+	if body.Lat == 0 && body.Lng == 0 {
+		// 0,0 is the device "no fix" sentinel — reject rather than teleport the
+		// vehicle into the Gulf of Guinea.
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no GPS fix"})
+		return
+	}
+
+	ts := time.Now().UTC()
+	if body.TS != nil && *body.TS != "" {
+		parsed, perr := time.Parse(time.RFC3339, *body.TS)
+		if perr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ts: " + perr.Error()})
+			return
+		}
+		if parsed.After(time.Now().Add(5 * time.Minute)) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ts is in the future"})
+			return
+		}
+		ts = parsed.UTC()
+	}
+
+	raw := json.RawMessage(`{"source":"mobile"}`)
+	if body.Accuracy != nil {
+		if b, mErr := json.Marshal(map[string]any{"source": "mobile", "accuracyM": *body.Accuracy}); mErr == nil {
+			raw = b
+		}
+	}
+
+	p := iot.Ping{
+		VehicleID: vehicleID,
+		DeviceID:  nil, // device-less: this is a phone, not a paired tracker
+		TS:        ts,
+		Lat:       body.Lat,
+		Lng:       body.Lng,
+		Heading:   body.Heading,
+		SpeedKmh:  body.SpeedKmh,
+		Raw:       raw,
+	}
+	if _, err := h.Store.InsertPings(ctx, []iot.Ping{p}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// ApplyVehicleHotState syncs the vehicle row AND enqueues the status-change
+	// outbox event in one transaction — do not also publish via h.Events here or
+	// the status change would be emitted twice.
+	if _, err := h.Store.ApplyVehicleHotState(ctx, p); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if h.Hub != nil {
+		h.Hub.Publish(p)
+	}
+	_ = h.Store.ApplyGeofenceTransitions(ctx, iot.ProcessGeofences(p))
+
+	latest, err := h.Store.LatestPing(ctx, vehicleID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "vehicleId": vehicleID, "ping": latest})
+}
+
+// resolveDriverActiveVehicle maps the authenticated platform user to a driver
+// row (by platform_user_id) and then to the vehicle on their active journey.
+// Returns errNoDriverProfile (→403) when no driver is linked to the account and
+// errNoActiveAssignment (→409) when the driver has no active JMP covering today.
+func (h *IoT) resolveDriverActiveVehicle(ctx context.Context, c *gin.Context) (string, error) {
+	uid, ok := auth.PlatformUserID(c)
+	if !ok {
+		return "", errNoDriverProfile
+	}
+	drivers, _, err := h.Repo.Drivers.ListFiltered(ctx, store.ListFilter{
+		Filters: map[string]string{"platform_user_id": uid.String()},
+		Limit:   2,
+	})
+	if err != nil {
+		return "", err
+	}
+	var driverID string
+	if len(drivers) > 0 {
+		driverID = drivers[0].ID
+	} else {
+		// Not linked yet: one-time bootstrap by email. The platform JWT carries
+		// an authenticated (subject, email) pair, so an email match lets us stamp
+		// the durable platform_user_id link without an admin step. Email is used
+		// only here, once — every subsequent request resolves by UUID.
+		driverID, err = h.bootstrapDriverLink(ctx, uid, c)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	jmps, _, err := h.Repo.JMPs.ListFiltered(ctx, store.ListFilter{
+		Filters: map[string]string{"driver_id": driverID, "status": "active"},
+		Limit:   1000,
+	})
+	if err != nil {
+		return "", err
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	best := ""
+	bestStart := ""
+	for _, j := range jmps {
+		if j.VehicleID == "" || j.StartDate == "" {
+			continue
+		}
+		if today < j.StartDate || today > jmpWindowEnd(j) {
+			continue
+		}
+		// Prefer the most recently started journey when several overlap.
+		if best == "" || j.StartDate > bestStart {
+			best = j.VehicleID
+			bestStart = j.StartDate
+		}
+	}
+	if best == "" {
+		return "", errNoActiveAssignment
+	}
+	return best, nil
+}
+
+// bootstrapDriverLink stamps platform_user_id on the single unlinked driver
+// whose email matches the caller's JWT, returning that driver's id. Returns
+// errNoDriverProfile when there is no email, no match, or an ambiguous match
+// (more than one unlinked driver shares the email) — auto-linking only proceeds
+// when it is unambiguous; the rest must be linked manually by an admin.
+func (h *IoT) bootstrapDriverLink(ctx context.Context, uid uuid.UUID, c *gin.Context) (string, error) {
+	claims, ok := auth.PlatformClaimsFromContext(c)
+	if !ok || claims.Email == "" {
+		return "", errNoDriverProfile
+	}
+	pool := h.Repo.Pool()
+	rows, err := pool.Query(ctx, `
+		SELECT id FROM drivers
+		WHERE platform_user_id IS NULL AND lower(email) = lower($1)
+		LIMIT 2`, claims.Email)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(ids) != 1 {
+		return "", errNoDriverProfile
+	}
+	// Guard the WHERE on still-NULL so a concurrent bootstrap can't double-stamp;
+	// the loser sees 0 rows affected and falls back to errNoDriverProfile (its
+	// retry then resolves cleanly by UUID).
+	ct, err := pool.Exec(ctx, `
+		UPDATE drivers SET platform_user_id = $1
+		WHERE id = $2 AND platform_user_id IS NULL`, uid, ids[0])
+	if err != nil {
+		return "", err
+	}
+	if ct.RowsAffected() == 0 {
+		return "", errNoDriverProfile
+	}
+	return ids[0], nil
+}
+
+// jmpWindowEnd is the inclusive last date a JMP is considered active, mirroring
+// the fuel-reconciliation window (internal/jmp/reconcile.go): completion date if
+// set, else expected return, else expected arrival, else the start date.
+func jmpWindowEnd(j models.JMP) string {
+	if len(j.CompletedAt) >= 10 {
+		return j.CompletedAt[:10]
+	}
+	if j.ExpectedReturn != "" {
+		return j.ExpectedReturn
+	}
+	if j.ExpectedArrival != "" {
+		return j.ExpectedArrival
+	}
+	return j.StartDate
 }
 
 func (h *IoT) ensureVehicle(ctx context.Context, vehicleID string) error {

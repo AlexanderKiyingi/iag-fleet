@@ -143,7 +143,7 @@ func NewCollection[T any, PT IdentifiablePtr[T]](pool *pgxpool.Pool, table strin
 // buildSelectExpr emits the SELECT column list, casting DATE → 'YYYY-MM-DD'
 // and TIMESTAMPTZ → 'YYYY-MM-DDTHH24:MI:SS"Z"' so the model's string
 // fields receive the JSON-friendly text format directly. Plain string
-// fields are wrapped in COALESCE(..., '') so a nullable column with a
+// fields are wrapped in COALESCE(..., ”) so a nullable column with a
 // NULL row doesn't break the scan into the model's plain `string` field.
 func buildSelectExpr(cols []columnInfo) string {
 	parts := make([]string, len(cols))
@@ -156,6 +156,11 @@ func buildSelectExpr(cols []columnInfo) string {
 			// Force UTC then format as RFC3339 (millisecond precision is
 			// what JS Date.toISOString() produces; we match that).
 			expr = "to_char(" + ci.name + " AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
+		case "uuid":
+			// UUID columns map to plain `string` model fields; cast to text so
+			// the COALESCE(..., '') wrapper below type-checks (COALESCE(uuid, '')
+			// would otherwise fail to resolve a common type and break the query).
+			expr = ci.name + "::text"
 		default:
 			expr = ci.name
 		}
@@ -600,7 +605,7 @@ func (c *Collection[T, PT]) bindArgs(item T, skipID bool) ([]any, error) {
 		// the empty zero value to NULL on write so optional date/timestamp
 		// fields (last_received, last_consumed, warehouse_synced_at, …) insert
 		// cleanly instead of erroring with "invalid input syntax".
-		if ci.isString && (ci.dbCast == "date" || ci.dbCast == "timestamptz") {
+		if ci.isString && (ci.dbCast == "date" || ci.dbCast == "timestamptz" || ci.dbCast == "uuid") {
 			if s, ok := val.(string); ok && s == "" {
 				args = append(args, nil)
 				continue

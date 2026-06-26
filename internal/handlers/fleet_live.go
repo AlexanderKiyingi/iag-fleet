@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-iot/iot"
+	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -27,13 +27,14 @@ func (h *FleetLive) Register(rg *gin.RouterGroup) {
 }
 
 type fleetVehicleSnap struct {
-	ID       string  `json:"id"`
-	Plate    string  `json:"plate"`
-	Lat      float64 `json:"lat"`
-	Lng      float64 `json:"lng"`
-	Status   string  `json:"status"`
-	Heading  float64 `json:"heading"`
-	Location string  `json:"location"`
+	ID            string  `json:"id"`
+	Plate         string  `json:"plate"`
+	Lat           float64 `json:"lat"`
+	Lng           float64 `json:"lng"`
+	Status        string  `json:"status"`
+	Heading       float64 `json:"heading"`
+	Location      string  `json:"location"`
+	LastFixSource string  `json:"lastFixSource,omitempty"`
 }
 
 type fleetPayload struct {
@@ -147,5 +148,6 @@ func vehicleSnap(v models.Vehicle) fleetVehicleSnap {
 	return fleetVehicleSnap{
 		ID: v.ID, Plate: v.Plate, Lat: v.Lat, Lng: v.Lng,
 		Status: v.Status, Heading: v.Heading, Location: v.Location,
+		LastFixSource: v.LastFixSource,
 	}
 }
