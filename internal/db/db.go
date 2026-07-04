@@ -38,6 +38,15 @@ func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	cfg.MaxConnIdleTime = 15 * time.Minute
 	cfg.ConnConfig.ConnectTimeout = 10 * time.Second
 
+	// Isolate on the shared Railway database in this service's own schema, pinned
+	// in code rather than depending on a ?search_path= param in DATABASE_URL
+	// (which, if dropped, would silently land tables in public). Overrides any
+	// value parsed from the DSN; falls back to public for not-yet-relocated tables.
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = "iag_fleet, public"
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
