@@ -88,7 +88,15 @@ type Vehicle struct {
 	// CostCenter is the finance bucket warehouse stock issues raised on this
 	// vehicle's maintenance WOs are costed to. Optional.
 	CostCenter string `json:"costCenter,omitempty" db:"cost_center"`
+	// Devices is the JSONB-backed list of IoT/accessory devices fitted to
+	// this vehicle. Lossless []map[string]any because the device objects
+	// carry arbitrary, evolving fields (id, backendId, type, serialNumber…).
+	Devices VehicleDevices `json:"devices,omitempty" db:"devices"`
 }
+
+// VehicleDevices is the JSONB-backed device list on vehicles.devices.
+// Scanner/Valuer in jsonb.go. Lossless map slice — no fixed schema.
+type VehicleDevices []map[string]any
 
 func (v Vehicle) GetID() string    { return v.ID }
 func (v *Vehicle) SetID(id string) { v.ID = id }
