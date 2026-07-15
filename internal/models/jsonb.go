@@ -238,6 +238,22 @@ func (d InspectionDefects) Value() (driver.Value, error) {
 	return json.Marshal(d)
 }
 
+func (d *VehicleDevices) Scan(src any) error {
+	b, err := jsonbBytes(src)
+	if err != nil || b == nil {
+		*d = nil
+		return err
+	}
+	return json.Unmarshal(b, d)
+}
+
+func (d VehicleDevices) Value() (driver.Value, error) {
+	if d == nil {
+		return []byte(`[]`), nil
+	}
+	return json.Marshal(d)
+}
+
 // jsonbBytes normalizes the various concrete types pgx can hand to Scan
 // for a JSONB column ([]byte, string, or nil).
 func jsonbBytes(src any) ([]byte, error) {

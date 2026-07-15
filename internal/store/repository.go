@@ -60,6 +60,10 @@ type Repository struct {
 	// Doesn't follow the generic Collection pattern because every read /
 	// write is implicitly user-scoped.
 	Notifications *NotificationsStore
+
+	// UserProfiles is the per-user editable profile (phone/department/bio/
+	// avatar). Like Notifications it's user-scoped, not domain-ID addressed.
+	UserProfiles *UserProfilesStore
 }
 
 // NewRepository wires every Collection to its Postgres table.
@@ -88,6 +92,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 		PMSchedules:         NewCollection[models.PMSchedule, *models.PMSchedule](pool, "pm_schedules"),
 
 		Notifications: &NotificationsStore{pool: pool},
+		UserProfiles:  &UserProfilesStore{pool: pool},
 	}
 }
 
