@@ -3,6 +3,7 @@ package router
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -75,6 +76,15 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	}
 
 	r := gin.Default()
+	// Pin trusted proxies so the per-IP rate limiters below key on the real,
+	// non-spoofable client IP instead of a client-supplied X-Forwarded-For.
+	// Only applied when TRUSTED_PROXIES is set (to the gateway/edge CIDR); left
+	// unset it keeps gin's default so existing deployments don't regress.
+	if len(opts.Config.TrustedProxies) > 0 {
+		if err := r.SetTrustedProxies(opts.Config.TrustedProxies); err != nil {
+			log.Fatalf("fleet: invalid TRUSTED_PROXIES: %v", err)
+		}
+	}
 	// otelgin early so the server span covers the whole request chain; no-op
 	// when the global tracer provider failed to init in main.
 	r.Use(otelgin.Middleware("iag-fleet"))

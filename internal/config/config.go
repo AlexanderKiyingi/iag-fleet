@@ -22,6 +22,10 @@ type Config struct {
 	PublicAPIURL         string
 	AutoMigrate          bool
 	KafkaBrokers         []string
+	// TrustedProxies pins gin's trusted proxies (gateway/edge CIDR) so the
+	// per-IP rate limiter keys on the real, non-spoofable client IP. Empty leaves
+	// gin's default (trust all) — spoofable; set behind the gateway.
+	TrustedProxies []string
 	EventBusEnabled      bool
 	ServiceClientID      string
 	ServiceClientSecret  string
@@ -95,6 +99,13 @@ func Load() (Config, error) {
 		for _, b := range strings.Split(brokers, ",") {
 			if t := strings.TrimSpace(b); t != "" {
 				cfg.KafkaBrokers = append(cfg.KafkaBrokers, t)
+			}
+		}
+	}
+	if proxies := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); proxies != "" {
+		for _, p := range strings.Split(proxies, ",") {
+			if t := strings.TrimSpace(p); t != "" {
+				cfg.TrustedProxies = append(cfg.TrustedProxies, t)
 			}
 		}
 	}
