@@ -8,6 +8,11 @@
 // from the authoritative warehouse on-hand. The refresh is a SET (not a
 // delta), so it is idempotent and immune to ordering/duplication — the
 // dedupe table is a belt-and-suspenders guard plus an audit trail.
+//
+// Because the refresh is idempotent, the dedupe row is written after the work,
+// never before: a mark that precedes the handler turns a transient failure into
+// a permanent skip, and the only thing it would buy is avoiding a duplicate
+// apply that costs nothing here.
 package consumer
 
 import (
@@ -120,23 +125,45 @@ func (c *Consumer) handleMessage(ctx context.Context, msg kafka.Message) error {
 		eventID = string(msg.Key)
 	}
 	if eventID != "" {
-		tag, err := c.pool.Exec(ctx, `
-			INSERT INTO warehouse_event_dedupe (event_id, topic) VALUES ($1, $2)
-			ON CONFLICT (event_id) DO NOTHING`, eventID, msg.Topic)
-		if err != nil {
+		var seen bool
+		if err := c.pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM warehouse_event_dedupe WHERE event_id = $1)`,
+			eventID).Scan(&seen); err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return nil // already processed
+		if seen {
+			return nil
 		}
 	}
 
+	// The event is marked only after it has been applied. Marking first — which
+	// is what this did — recorded a failed refresh as handled: the message was
+	// left uncommitted for redelivery, and the redelivery then found the row and
+	// skipped the work, leaving the projection stale until something else moved
+	// that item.
+	//
+	// Marking after can double-apply if the process dies in between, and that is
+	// the right way round here: the refresh is an absolute SET from the
+	// warehouse's own on-hand, so applying it twice is indistinguishable from
+	// applying it once.
+	if err := c.apply(ctx, env); err != nil {
+		return err
+	}
+	if eventID == "" {
+		return nil
+	}
+	_, err := c.pool.Exec(ctx, `
+		INSERT INTO warehouse_event_dedupe (event_id, topic) VALUES ($1, $2)
+		ON CONFLICT (event_id) DO NOTHING`, eventID, msg.Topic)
+	return err
+}
+
+func (c *Consumer) apply(ctx context.Context, env platformEvent) error {
 	switch env.Type {
 	case typeMovementPosted:
 		return c.handleMovementPosted(ctx, env.Data)
 	case typeStockBelowMinimum:
 		c.handleBelowMinimum(env.Data)
-		return nil
 	}
 	return nil
 }
