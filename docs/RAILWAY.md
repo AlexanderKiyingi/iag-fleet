@@ -67,7 +67,35 @@ Do **not** leave `ADDR=:4008` in Railway while `PORT` points at another port —
 | `DATABASE_URL` | From Postgres plugin (see above) — **not** localhost |
 | `AUTO_MIGRATE` | `true` (default; applies pending migrations each deploy) |
 | `JWKS_URL`, `JWT_ISSUER` | Your auth service — fleet verifies Bearer JWTs locally against this |
+| `AUTH_TOKEN_URL` | Auth's `/oauth/token`; defaults to `JWT_ISSUER` + `/oauth/token` |
+| `SERVICE_CLIENT_ID`, `SERVICE_CLIENT_SECRET` | Fleet's own OAuth client (`iag-fleet` by default), used to register the permission catalogue and to call warehouse/procurement |
 | `CORS_ORIGIN`, `PUBLIC_API_URL` | Your frontend / gateway URLs |
+
+### Reach auth over the private network
+
+`JWT_ISSUER` is a token *claim* — it must stay the public issuer string that
+auth signs into `iss`, or verification fails. But the two URLs fleet actually
+dials are separately overridable, and should point at Railway's private
+network so a public-edge outage can't break boot:
+
+```
+JWKS_URL       = http://iag-authentication.railway.internal:3001/.well-known/jwks.json
+AUTH_TOKEN_URL = http://iag-authentication.railway.internal:3001/oauth/token
+JWT_ISSUER     = https://<auth public host>      # unchanged — must match `iss`
+```
+
+Left at their defaults these derive from `JWT_ISSUER`, i.e. they egress to the
+public Railway edge — which answers `404 {"message":"Application not found"}`
+whenever the auth service has no live deployment, taking fleet's JWKS
+bootstrap and permission registration down with it.
+
+### `401 invalid client` on permission registration
+
+Fleet's `SERVICE_CLIENT_ID` must appear in the **auth service's**
+`SERVICE_CLIENT_SECRETS_JSON` with the exact same secret as fleet's
+`SERVICE_CLIENT_SECRET`. Auth re-syncs those secrets into `oauth_clients` on
+every boot, so fixing a mismatch means updating the variable on *both*
+services and redeploying auth first, then fleet.
 
 > **Auth (post hard-cutover):** fleet runs pure **Bearer+aud** — every
 > request must carry a JWT with `aud=iag.fleet`, verified locally via JWKS.

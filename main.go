@@ -110,9 +110,9 @@ func main() {
 	// exhausted, the server still starts so /health stays green for
 	// Railway, the verifier returns "no verification key" until the
 	// background loop succeeds (fails closed), and the background loop
-	// continues to retry on its ticker.
+	// retries every few seconds until it does.
 	bootstrapJWKS(verifier)
-	go jwksRefreshLoop(verifier)
+	go jwksRefreshLoop(appCtx, verifier)
 	platformAuth := fleetmw.NewPlatformAuth(fleetmw.PlatformAuthOptions{
 		Verifier: verifier,
 	})
@@ -377,11 +377,40 @@ func runWarehouseReconcileLoop(ctx context.Context, pool *pgxpool.Pool, wh jobs.
 	}
 }
 
-func jwksRefreshLoop(v *authclient.Verifier) {
-	ticker := time.NewTicker(5 * time.Minute)
-	for range ticker.C {
-		if err := v.Refresh(context.Background()); err != nil {
-			slog.Warn("jwks refresh", "err", err)
+// jwksRefreshLoop keeps the verifier's key set current. It runs at two speeds:
+// the steady rotation interval once keys are loaded, and a much shorter one
+// while the key set is empty. Empty is not a mild degradation — every
+// authenticated request fails closed — so when boot exhausts its budget (auth
+// service redeploying, JWKS 404) the recovery window must be seconds, not the
+// five minutes it takes for the rotation tick to come round.
+func jwksRefreshLoop(ctx context.Context, v *authclient.Verifier) {
+	const (
+		steadyInterval   = 5 * time.Minute
+		degradedInterval = 15 * time.Second
+	)
+	for {
+		wait := steadyInterval
+		if !v.HasKeys() {
+			wait = degradedInterval
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+
+		hadKeys := v.HasKeys()
+		refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := v.Refresh(refreshCtx)
+		cancel()
+		switch {
+		case err != nil && hadKeys:
+			// Last good key set is still in memory; tokens keep verifying.
+			slog.Warn("jwks refresh failed; serving with the previous key set", "err", err)
+		case err != nil:
+			slog.Error("jwks still unavailable; all authenticated requests are being rejected", "err", err)
+		case !hadKeys:
+			slog.Info("jwks recovered; token verification restored")
 		}
 	}
 }
