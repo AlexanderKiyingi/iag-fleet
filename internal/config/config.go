@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/alvor-technologies/iag-platform-go/corsenv"
+	"github.com/alvor-technologies/iag-platform-go/runtimeenv"
 )
 
 // Config holds runtime settings for the fleet API.
@@ -184,16 +185,6 @@ func (c Config) IsProduction() bool {
 	return c.Environment == "production" || c.Environment == "prod"
 }
 
-// isDevLike reports an environment where fail-open behaviour is a deliberate
-// convenience rather than an accident.
-func (c Config) isDevLike() bool {
-	switch c.Environment {
-	case "development", "dev", "local", "test":
-		return true
-	}
-	return false
-}
-
 // HardenedRuntime reports whether production safeguards apply: fail-closed
 // RBAC, and the demo-only endpoints (reset_data, simulate_vehicles) refusing to
 // run.
@@ -207,17 +198,13 @@ func (c Config) isDevLike() bool {
 //
 // Unlike the Validate checks this can't prevent boot — the worst case is a
 // token that previously got god-mode by accident now getting 403.
+//
+// The rule itself now lives in shared/platform-go/runtimeenv so there is one
+// copy of it across the platform. This service keeps its signals on Config,
+// captured at Load, rather than re-reading the process here — which is why it
+// calls the pure HardenedFrom rather than Hardened.
 func (c Config) HardenedRuntime() bool {
-	// An explicit production value always hardens, including on a Config built
-	// by hand rather than through Load. Anything else would make the safe
-	// setting depend on a bookkeeping flag the caller didn't know to set.
-	if c.IsProduction() {
-		return true
-	}
-	if c.EnvironmentExplicit {
-		return !c.isDevLike()
-	}
-	return c.Deployed
+	return runtimeenv.HardenedFrom(c.Environment, c.EnvironmentExplicit, c.Deployed)
 }
 
 // StrictRBAC denies access when JWT permissions are empty (fail-closed).
@@ -228,12 +215,7 @@ func (c Config) StrictRBAC() bool {
 // deployedRuntime distinguishes a hosted instance from a laptop. Same signal as
 // internal/db's localhost-DSN check; GIN_MODE=release is set by the Dockerfile,
 // so anything built from it counts.
-func deployedRuntime() bool {
-	if os.Getenv("RAILWAY_ENVIRONMENT") != "" || os.Getenv("RAILWAY_PROJECT_ID") != "" {
-		return true
-	}
-	return strings.EqualFold(os.Getenv("GIN_MODE"), "release")
-}
+func deployedRuntime() bool { return runtimeenv.Deployed() }
 
 func (c Config) HasWildcardCORS() bool {
 	for _, o := range strings.Split(c.CORSOrigin, ",") {
