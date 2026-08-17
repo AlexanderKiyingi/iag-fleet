@@ -146,6 +146,10 @@ func (h *Inspections) createDefectWO(c *gin.Context) {
 		}
 	}
 	mx := models.MaintenanceItem{
+		// See safetyCreateWO: Collection.Add does not generate IDs, and an
+		// empty one breaks the inspection↔WO link and collides on the next
+		// defect WO.
+		ID:        generateID("MX"),
 		VehicleID: ins.VehicleID,
 		Date:      todayDate(),
 		Type:      "Inspection",

@@ -1416,6 +1416,12 @@ func (w *Workflows) safetyCreateWO(c *gin.Context) {
 		priority = "critical"
 	}
 	mx := models.MaintenanceItem{
+		// Collection.Add inserts the ID it is given and never generates one, so
+		// without this the work order lands with id='' — which leaves
+		// safety.linked_wo_id empty (no link) and makes the next incident-raised
+		// WO collide on the primary key. Same prefix the /maintenance resource
+		// uses.
+		ID:             generateID("MX"),
 		VehicleID:      se.VehicleID,
 		Date:           todayDate(),
 		Type:           "Repair",
