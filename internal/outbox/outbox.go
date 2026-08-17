@@ -10,8 +10,16 @@ import (
 	"math"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// execer is the subset of pgx that both *pgxpool.Pool and pgx.Tx satisfy. It
+// is what lets the pooled and in-transaction enqueues share one INSERT.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
 
 // Row is a pending or completed outbox entry.
 type Row struct {
@@ -32,15 +40,37 @@ type Store struct {
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
+// Enqueue writes an outbox row on a pooled connection. Use it only when the
+// caller has no transaction open; when one is available prefer EnqueueTx,
+// which closes the lost-event window described there.
 func (s *Store) Enqueue(ctx context.Context, eventType, key string, payload any) error {
 	if s == nil || s.pool == nil {
 		return ErrNotEnqueued
 	}
+	return enqueueOn(ctx, s.pool, eventType, key, payload)
+}
+
+// EnqueueTx writes the outbox row on the caller's transaction, so the event and
+// the domain write it describes commit or roll back together.
+//
+// This is what makes the outbox actually transactional. Enqueue runs on a
+// separate pooled connection, so a caller that commits and then enqueues leaves
+// a window: if the process dies (or the INSERT fails) in between, no outbox row
+// exists and the relay has nothing to retry — the event is lost permanently,
+// with only a log line to show for it.
+func (s *Store) EnqueueTx(ctx context.Context, tx pgx.Tx, eventType, key string, payload any) error {
+	if tx == nil {
+		return ErrNotEnqueued
+	}
+	return enqueueOn(ctx, tx, eventType, key, payload)
+}
+
+func enqueueOn(ctx context.Context, db execer, eventType, key string, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal outbox payload: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = db.Exec(ctx, `
 		INSERT INTO fleet_event_outbox (event_type, event_key, payload)
 		VALUES ($1, $2, $3::jsonb)
 	`, eventType, nullable(key), body)

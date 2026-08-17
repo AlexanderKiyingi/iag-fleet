@@ -1586,6 +1586,19 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 		return
 	}
 
+	// Enqueue the completion event inside the tx: the outbox row and the WO
+	// transition are now durable together, so the event can't be lost to a
+	// crash between COMMIT and a post-commit enqueue. Downstream consumers
+	// (warehouse stock reconcile, notifications) depend on it arriving.
+	if err := w.emitFleetTx(ctx, tx, events.TypeMaintenanceCompleted, map[string]string{
+		"maintenanceId": id,
+		"vehicleId":     vehicleID,
+		"pmScheduleId":  pmScheduleID,
+	}, id); err != nil {
+		respondError(c, err)
+		return
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		respondError(c, err)
 		return
@@ -1609,11 +1622,6 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 		}
 	}
 	w.Repo.LogBest(ctx, "complete", "maintenance_item", id, fmt.Sprintf("%d parts decremented", len(lines)), user)
-	w.emitFleet(ctx, events.TypeMaintenanceCompleted, map[string]string{
-		"maintenanceId": id,
-		"vehicleId":     vehicleID,
-		"pmScheduleId":  pmScheduleID,
-	}, id)
 	c.JSON(http.StatusOK, updated)
 }
 
@@ -1714,4 +1722,15 @@ func (w *Workflows) emitFleet(ctx context.Context, eventType string, fields map[
 		return
 	}
 	w.Events.PublishFleet(ctx, eventType, events.FleetEventData(fields), key, key)
+}
+
+// emitFleetTx is emitFleet for callers holding a transaction: the outbox row
+// commits with the domain write instead of after it. It returns an error rather
+// than swallowing one — inside a tx the caller can still abort, and failing the
+// request beats silently dropping an event downstream consumers are waiting on.
+func (w *Workflows) emitFleetTx(ctx context.Context, tx pgx.Tx, eventType string, fields map[string]string, key string) error {
+	if w.Events == nil || !w.Events.Enabled() {
+		return nil
+	}
+	return w.Events.PublishFleetTx(ctx, tx, eventType, events.FleetEventData(fields), key, key)
 }

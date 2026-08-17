@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -55,6 +56,7 @@ const (
 
 type outboxEnqueuer interface {
 	Enqueue(ctx context.Context, eventType, key string, payload any) error
+	EnqueueTx(ctx context.Context, tx pgx.Tx, eventType, key string, payload any) error
 }
 
 // Bus publishes fleet domain events to iag.fleet.
@@ -107,7 +109,10 @@ func (b *Bus) Close() error {
 // Enabled reports whether Kafka publishing is active.
 func (b *Bus) Enabled() bool { return b != nil && b.enabled }
 
-// UsesOutbox reports whether events are enqueued transactionally.
+// UsesOutbox reports whether an outbox is attached, i.e. whether events are
+// durably queued for the relay instead of written straight to Kafka. Note this
+// says nothing about atomicity: only PublishFleetTx enqueues inside the
+// caller's transaction. PublishFleet still writes on a pooled connection.
 func (b *Bus) UsesOutbox() bool { return b != nil && b.store != nil }
 
 // SetOutbox attaches the transactional outbox store.
@@ -171,15 +176,7 @@ func (b *Bus) PublishFleet(ctx context.Context, eventType string, data map[strin
 	if !b.enabled {
 		return
 	}
-	evt := PlatformEvent{
-		ID:            uuid.NewString(),
-		Type:          eventType,
-		Time:          time.Now().UTC().Format(time.RFC3339Nano),
-		Source:        Source,
-		SpecVersion:   SpecVersion,
-		Data:          data,
-		CorrelationID: correlationID,
-	}
+	evt := b.newEvent(eventType, data, correlationID)
 	if b.store != nil {
 		if err := b.store.Enqueue(ctx, eventType, key, evt); err != nil {
 			slog.Warn("fleet event enqueue failed", "type", eventType, "err", err)
@@ -188,6 +185,45 @@ func (b *Bus) PublishFleet(ctx context.Context, eventType string, data map[strin
 	}
 	if err := b.publish(ctx, evt, key); err != nil {
 		slog.Warn("fleet event publish failed", "type", eventType, "err", err)
+	}
+}
+
+// PublishFleetTx enqueues a domain event on the caller's open transaction, so
+// the outbox row commits atomically with the write it describes.
+//
+// Prefer this over PublishFleet wherever a transaction is already open.
+// PublishFleet enqueues after the caller has committed, on a different
+// connection, so a crash in that window loses the event outright — no outbox
+// row means the relay has nothing to retry.
+//
+// It returns an error instead of logging one: the caller is still inside its
+// transaction and can abort. Failing the request is the better outcome, since a
+// dropped event silently desyncs downstream consumers.
+func (b *Bus) PublishFleetTx(ctx context.Context, tx pgx.Tx, eventType string, data map[string]any, key, correlationID string) error {
+	if b == nil || !b.enabled {
+		return nil
+	}
+	evt := b.newEvent(eventType, data, correlationID)
+	if b.store == nil {
+		// Bus enabled without an outbox — no transactional path exists, so fall
+		// back to the direct write rather than dropping the event.
+		return b.publish(ctx, evt, key)
+	}
+	if err := b.store.EnqueueTx(ctx, tx, eventType, key, evt); err != nil {
+		return fmt.Errorf("enqueue %s: %w", eventType, err)
+	}
+	return nil
+}
+
+func (b *Bus) newEvent(eventType string, data map[string]any, correlationID string) PlatformEvent {
+	return PlatformEvent{
+		ID:            uuid.NewString(),
+		Type:          eventType,
+		Time:          time.Now().UTC().Format(time.RFC3339Nano),
+		Source:        Source,
+		SpecVersion:   SpecVersion,
+		Data:          data,
+		CorrelationID: correlationID,
 	}
 }
 
