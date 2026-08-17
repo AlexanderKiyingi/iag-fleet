@@ -33,6 +33,34 @@ func integrationVehicle(id, plate string) models.Vehicle {
 	}
 }
 
+// integrationDriver is the canonical seed driver. drivers.permit_expiry is a
+// NOT NULL date with no default, so it has to be set explicitly.
+func integrationDriver(id string) models.Driver {
+	return models.Driver{
+		ID: id, Name: "Test Driver", Initials: "TD", Role: "driver",
+		Phone: "+256700000000", PermitNo: "P-" + id, PermitClass: "CE",
+		PermitExpiry: "2033-12-31", HomeRegion: "Central", Status: "available",
+	}
+}
+
+// integrationJMP is the canonical seed JMP. Every NOT NULL column on `jmps`
+// is populated here, including the ones carrying a database DEFAULT: the
+// generic insert binds every mapped column, so an empty Go field is sent as
+// NULL and the default never gets a chance to apply. Seeding a JMP literal
+// inline instead of through this helper is how these tests kept breaking one
+// column at a time.
+func integrationJMP(id, vehicleID, driverID, start, ret, status string) models.JMP {
+	return models.JMP{
+		ID: id, VehicleID: vehicleID, DriverID: driverID, Purpose: "test",
+		StartDate: start, ExpectedArrival: ret, ExpectedReturn: ret,
+		Status: status, MileageStatus: "none",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), CreatedBy: "integration-test",
+		// text NOT NULL columns are satisfied by Go's "" zero value, but a nil
+		// slice and an empty date/timestamp string both bind as NULL.
+		ParkingPhotos: []string{},
+	}
+}
+
 func TestIntegration_VehicleCRUD(t *testing.T) {
 	pool, cleanup := testdb.Pool(t)
 	defer cleanup()

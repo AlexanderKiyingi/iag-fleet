@@ -50,10 +50,7 @@ func TestIntegration_DeleteBlockedByLiveJMP(t *testing.T) {
 	ctx := context.Background()
 	gin.SetMode(gin.TestMode)
 
-	if _, err := repo.JMPs.Add(ctx, models.JMP{
-		ID: "JMP-DEL", VehicleID: "VEH-DEL", DriverID: "DRV-DEL", Purpose: "x",
-		StartDate: "2032-02-01", ExpectedReturn: "2032-02-03", Status: "active",
-	}); err != nil {
+	if _, err := repo.JMPs.Add(ctx, integrationJMP("JMP-DEL", "VEH-DEL", "DRV-DEL", "2032-02-01", "2032-02-03", "active")); err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
 
@@ -83,10 +80,7 @@ func TestIntegration_BulkDeleteHonorsGuard(t *testing.T) {
 	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-FREE", "FRE-1")); err != nil {
 		t.Fatalf("seed free vehicle: %v", err)
 	}
-	if _, err := repo.JMPs.Add(ctx, models.JMP{
-		ID: "JMP-BULK", VehicleID: "VEH-BUSY", Purpose: "x",
-		StartDate: "2032-03-01", ExpectedReturn: "2032-03-03", Status: "active",
-	}); err != nil {
+	if _, err := repo.JMPs.Add(ctx, integrationJMP("JMP-BULK", "VEH-BUSY", "DRV-BULK", "2032-03-01", "2032-03-03", "active")); err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
 
@@ -124,7 +118,8 @@ func TestIntegration_TyrePositionUnique(t *testing.T) {
 	}
 	tr := NewTyreResource(repo)
 	mk := func(id, pos, status string) models.Tyre {
-		return models.Tyre{ID: id, VehicleID: "VEH-TYR", Position: pos, Status: status, Brand: "B"}
+		// tyres.mounted_date is NOT NULL (0001_initial).
+		return models.Tyre{ID: id, VehicleID: "VEH-TYR", Position: pos, Status: status, Brand: "B", MountedDate: "2031-01-15"}
 	}
 	if w := postJSONTo(tr.create, mk("TR1", "FL", "good")); w.Code != http.StatusCreated {
 		t.Fatalf("first FL tyre: status %d; %s", w.Code, w.Body.String())

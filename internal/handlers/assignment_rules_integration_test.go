@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,10 +31,30 @@ func postJSONTo(handler gin.HandlerFunc, payload any) *httptest.ResponseRecorder
 	return w
 }
 
+// These tests are about double-booking, not the toolbox gate, so the toolbox
+// talk is pre-completed — activating a journey without it is a 409 handled by
+// TestIntegration_JMPActiveRequiresToolbox.
 func jmp(id, driver, vehicle, start, ret, status string) models.JMP {
-	return models.JMP{
-		ID: id, DriverID: driver, VehicleID: vehicle, Purpose: "test",
-		StartDate: start, ExpectedReturn: ret, Status: status,
+	j := integrationJMP(id, vehicle, driver, start, ret, status)
+	j.Toolbox = models.Toolbox{Completed: true}
+	return j
+}
+
+// seedCrew creates the drivers and vehicles a set of JMPs reference. The create
+// handler enforces referential integrity, so an unseeded id fails the booking
+// assertion with a 400 long before any overlap check runs.
+func seedCrew(t *testing.T, repo *store.Repository, drivers, vehicles []string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, d := range drivers {
+		if _, err := repo.Drivers.Add(ctx, integrationDriver(d)); err != nil {
+			t.Fatalf("seed driver %s: %v", d, err)
+		}
+	}
+	for i, v := range vehicles {
+		if _, err := repo.Vehicles.Add(ctx, integrationVehicle(v, fmt.Sprintf("PL-%d-%s", i, v))); err != nil {
+			t.Fatalf("seed vehicle %s: %v", v, err)
+		}
 	}
 }
 
@@ -44,6 +65,7 @@ func TestIntegration_JMPDriverDoubleBooked(t *testing.T) {
 	repo := store.NewRepository(pool)
 	gin.SetMode(gin.TestMode)
 	j := NewJMPs(repo, "")
+	seedCrew(t, repo, []string{"DRV-DBK"}, []string{"VEH-DBK1", "VEH-DBK2", "VEH-DBK3"})
 
 	if w := postJSONTo(j.create, jmp("JMP-DBK1", "DRV-DBK", "VEH-DBK1", "2030-03-01", "2030-03-05", "active")); w.Code != http.StatusCreated {
 		t.Fatalf("first JMP status %d, want 201; %s", w.Code, w.Body.String())
@@ -66,6 +88,7 @@ func TestIntegration_JMPVehicleDoubleBooked(t *testing.T) {
 	repo := store.NewRepository(pool)
 	gin.SetMode(gin.TestMode)
 	j := NewJMPs(repo, "")
+	seedCrew(t, repo, []string{"DRV-VDB1", "DRV-VDB2"}, []string{"VEH-VDB"})
 
 	if w := postJSONTo(j.create, jmp("JMP-VDB1", "DRV-VDB1", "VEH-VDB", "2030-05-01", "2030-05-04", "active")); w.Code != http.StatusCreated {
 		t.Fatalf("first JMP status %d, want 201; %s", w.Code, w.Body.String())
@@ -84,6 +107,7 @@ func TestIntegration_JMPCompletedFreesSlot(t *testing.T) {
 	ctx := context.Background()
 	gin.SetMode(gin.TestMode)
 	j := NewJMPs(repo, "")
+	seedCrew(t, repo, []string{"DRV-CMP"}, []string{"VEH-CMP"})
 
 	if _, err := repo.JMPs.Add(ctx, jmp("JMP-CMP1", "DRV-CMP", "VEH-CMP", "2030-06-01", "2030-06-05", "completed")); err != nil {
 		t.Fatalf("seed completed JMP: %v", err)

@@ -44,12 +44,21 @@ func TestIntegration_JMPActiveRequiresToolbox(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	j := NewJMPs(repo, "")
 
+	// The create handler checks referential integrity once the toolbox gate
+	// passes, so the referenced driver/vehicle have to exist for the
+	// toolbox-completed case to reach 201.
+	ctx := context.Background()
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-TB", "TB-1")); err != nil {
+		t.Fatalf("seed vehicle: %v", err)
+	}
+	if _, err := repo.Drivers.Add(ctx, integrationDriver("DRV-TB")); err != nil {
+		t.Fatalf("seed driver: %v", err)
+	}
+
 	active := func(id string, completed bool) models.JMP {
-		return models.JMP{
-			ID: id, DriverID: "DRV-TB", VehicleID: "VEH-TB", Purpose: "x",
-			StartDate: "2031-02-01", ExpectedReturn: "2031-02-03", Status: "active",
-			Toolbox: models.Toolbox{Completed: completed},
-		}
+		j := integrationJMP(id, "VEH-TB", "DRV-TB", "2031-02-01", "2031-02-03", "active")
+		j.Toolbox = models.Toolbox{Completed: completed}
+		return j
 	}
 	if w := postJSONTo(j.create, active("JMP-TB1", false)); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "toolbox") {
 		t.Fatalf("active-without-toolbox: status %d body %q, want 409 + toolbox", w.Code, w.Body.String())
@@ -72,15 +81,13 @@ func TestIntegration_RequestAssignPatchBlocked(t *testing.T) {
 		t.Fatalf("seed driver: %v", err)
 	}
 	// A live journey occupying the driver, NOT sourced from our request.
-	if _, err := repo.JMPs.Add(ctx, models.JMP{
-		ID: "JMP-RQ", DriverID: "DRV-RQ", VehicleID: "VEH-OTHER", Purpose: "x",
-		StartDate: "2031-03-01", ExpectedReturn: "2031-03-05", Status: "active",
-	}); err != nil {
+	if _, err := repo.JMPs.Add(ctx, integrationJMP("JMP-RQ", "VEH-OTHER", "DRV-RQ", "2031-03-01", "2031-03-05", "active")); err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
 	if _, err := repo.Requests.Add(ctx, models.ServiceRequest{
 		ID: "REQ-RQ", RequesterName: "R", RequesterDept: "Ops", Purpose: "x",
 		Destination: "Y", StartDate: "2031-03-03", EndDate: "2031-03-04", Status: "approved",
+		SubmittedAt: "2031-03-01T08:00:00Z",
 	}); err != nil {
 		t.Fatalf("seed request: %v", err)
 	}

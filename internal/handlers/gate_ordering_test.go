@@ -45,6 +45,9 @@ func seedAssignedRequest(t *testing.T, repo *store.Repository, id string, approv
 		ID: id, RequesterName: "R", RequesterDept: "Ops", Purpose: "x",
 		Destination: "Y", StartDate: "2031-05-01", EndDate: "2031-05-02", Status: "assigned",
 		AssignedVehicleID: "VEH-" + id, AssignedDriverID: "DRV-" + id,
+		// NOT NULL with a DEFAULT, but the generic insert binds the column
+		// explicitly, so the default never applies.
+		SubmittedAt: "2031-04-29T08:00:00Z",
 	}
 	if approved {
 		r.ApprovedBy, r.ApprovedAt = "approver", "2031-04-30T08:00:00Z"
@@ -105,11 +108,12 @@ func TestIntegration_GateOrderJMPCompleteBlockedOnRejectedDispatch(t *testing.T)
 	gin.SetMode(gin.TestMode)
 	w := &Workflows{Repo: repo, Config: config.Config{GateOrderingEnabled: true}}
 
-	if _, err := repo.JMPs.Add(ctx, models.JMP{
-		ID: "JMP-GATE", DriverID: "DRV-G", VehicleID: "VEH-G", Purpose: "x",
-		StartDate: "2031-06-01", ExpectedReturn: "2031-06-03", Status: "active",
-		Toolbox: models.Toolbox{Completed: true}, DispatchStatus: "Rejected",
-	}); err != nil {
+	if _, err := repo.JMPs.Add(ctx, func() models.JMP {
+		j := integrationJMP("JMP-GATE", "VEH-G", "DRV-G", "2031-06-01", "2031-06-03", "active")
+		j.Toolbox = models.Toolbox{Completed: true}
+		j.DispatchStatus = "Rejected"
+		return j
+	}()); err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
 

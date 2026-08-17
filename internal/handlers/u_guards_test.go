@@ -54,7 +54,10 @@ func TestIntegration_DeploymentNoDoubleDeploy(t *testing.T) {
 	if r := post(`{"vehicleId":"VEH-DD"}`); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "vehicle already") {
 		t.Fatalf("dup vehicle: status %d body %q, want 409", r.Code, r.Body.String())
 	}
-	if r := post(`{"driverId":"DRV-DD"}`); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "driver already") {
+	// vehicleId is required by the bind, so pair the duplicate driver with a
+	// vehicle that isn't already deployed — otherwise this asserts the vehicle
+	// guard a second time instead of the driver guard.
+	if r := post(`{"vehicleId":"VEH-DD2","driverId":"DRV-DD"}`); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "driver already") {
 		t.Fatalf("dup driver: status %d body %q, want 409", r.Code, r.Body.String())
 	}
 	if r := post(`{"vehicleId":"VEH-NEW","driverId":"DRV-NEW"}`); r.Code != http.StatusCreated {
