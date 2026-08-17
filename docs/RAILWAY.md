@@ -42,8 +42,33 @@ Inside Railway there is no Postgres on `127.0.0.1` — you need the **Railway Po
    postgresql://svc_iag_fleet:PASSWORD@HOST:PORT/railway?sslmode=require
    ```
    Bootstrap once: `deploy/postgres/init/01-schemas.sql` + `02-service-roles.sh` (role owns `iag_fleet` schema).
-6. Leave `AUTO_MIGRATE=true` (default) so pending migrations apply on each deploy (includes `telemetry_timeseries` + Timescale — see `deploy/postgres/TIMESCALE.md`).
+6. Decide how migrations run — see “Environment and migrations” below. `AUTO_MIGRATE=true` applies pending migrations on each deploy (includes `telemetry_timeseries` + Timescale — see `deploy/postgres/TIMESCALE.md`), but it cannot be combined with `ENVIRONMENT=production`.
 7. Redeploy the fleet service.
+
+## Environment and migrations
+
+> **`ENVIRONMENT` and `AUTO_MIGRATE` are mutually constrained. Read this before deploying.**
+
+`config.Validate` refuses to boot when `ENVIRONMENT=production` and
+`AUTO_MIGRATE` is anything other than `false` — the intent is that schema
+changes run out of band, not on the startup path of every replica. Pick one:
+
+| Setup | `ENVIRONMENT` | `AUTO_MIGRATE` | Migrations run by |
+|---|---|---|---|
+| Recommended | `production` | `false` | `db/migrations` applied out of band before the deploy |
+| Convenience | *(unset)* | `true` | The service, on each boot |
+
+Historically this doc recommended the second row and never mentioned
+`ENVIRONMENT` at all, which had a consequence well beyond migrations:
+`ENVIRONMENT` also gates fail-closed RBAC and the demo-only `reset_data` /
+`simulate_vehicles` endpoints. Leaving it unset ran the hosted service with
+development-grade permission checks.
+
+Those runtime safeguards no longer depend on it — `config.HardenedRuntime`
+now also keys off Railway's own variables and `GIN_MODE=release`, so a hosted
+instance hardens whether or not `ENVIRONMENT` is set. Boot-time validation
+(`AUTO_MIGRATE`, CORS, secret length) still keys off `ENVIRONMENT` alone, so
+setting it explicitly remains the correct configuration.
 
 For Postgres created before Timescale, run migration `0012_timescale_existing_volume` via `AUTO_MIGRATE` or follow `deploy/postgres/TIMESCALE.md`. On managed Postgres without the Timescale add-on (e.g. Railway's default), the migration is a no-op — `telemetry_timeseries` stays a regular heap table (same fallback as `0010`).
 
@@ -65,7 +90,8 @@ Do **not** leave `ADDR=:4008` in Railway while `PORT` points at another port —
 | Variable | Notes |
 |----------|--------|
 | `DATABASE_URL` | From Postgres plugin (see above) — **not** localhost |
-| `AUTO_MIGRATE` | `true` (default; applies pending migrations each deploy) |
+| `ENVIRONMENT` | Set to **`production`**. See the warning below — this one is easy to miss and used to be absent from this table. |
+| `AUTO_MIGRATE` | `true` applies pending migrations on each deploy. **Incompatible with `ENVIRONMENT=production`**, which refuses to boot unless this is `false` — see below. |
 | `JWKS_URL`, `JWT_ISSUER` | Your auth service — fleet verifies Bearer JWTs locally against this |
 | `AUTH_TOKEN_URL` | Auth's `/oauth/token`; defaults to `JWT_ISSUER` + `/oauth/token` |
 | `SERVICE_CLIENT_ID`, `SERVICE_CLIENT_SECRET` | Fleet's own OAuth client (`iag-fleet` by default), used to register the permission catalogue and to call warehouse/procurement |

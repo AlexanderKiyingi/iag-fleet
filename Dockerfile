@@ -14,9 +14,15 @@ ENV FLEET_IOT_DEP=/deps/fleet-iot \
 
 FROM base AS fleet-iot-clone
 # Pin a commit SHA (not just "main") so standalone builds do not reuse a stale
-# Docker layer from before iag-telemetry-gateway API changes. Bump when fleet
-# depends on new fleet-iot symbols (e.g. PublishStatusChanges).
-ARG FLEET_IOT_REF=8dce711
+# Docker layer from before iag-telemetry-gateway API changes.
+#
+# Bump this whenever fleet depends on new fleet-iot BEHAVIOUR, not just new
+# symbols — a stale pin compiles fine and fails silently. This pin sat on
+# 8dce711 while fleet shipped migration 0031 + the `lastFixSource` field on the
+# live-map payload; the column is written by SyncVehicleFromPing inside
+# fleet-iot, so the API served an empty string in production until the bump to
+# 61b50de. Ingest authz hardening (6e6292b) was likewise undeployed.
+ARG FLEET_IOT_REF=61b50de
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
@@ -88,6 +94,13 @@ RUN set -eu; \
 FROM gcr.io/distroless/static-debian12:nonroot AS monorepo
 WORKDIR /app
 COPY --from=build-monorepo /out/ /app/
+# AUTO_MIGRATE=true is the image default because it is what an unconfigured
+# deploy needs to come up with a current schema. It is INCOMPATIBLE with
+# ENVIRONMENT=production, which fails validation unless AUTO_MIGRATE=false — set
+# both together, out of band, per docs/RAILWAY.md. Do not flip this default to
+# false on its own: that turns a loud boot failure into silent schema drift.
+# GIN_MODE=release also marks this as a deployed runtime, which is what makes
+# config.HardenedRuntime enforce fail-closed RBAC even with ENVIRONMENT unset.
 ENV PORT=4008 AUTO_MIGRATE=true LOG_FORMAT=json AUTH_MODE=gateway GIN_MODE=release
 EXPOSE 4008
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 CMD ["/app/healthcheck"]
@@ -96,6 +109,13 @@ ENTRYPOINT ["/app/api"]
 FROM gcr.io/distroless/static-debian12:nonroot AS standalone
 WORKDIR /app
 COPY --from=build-standalone /out/ /app/
+# AUTO_MIGRATE=true is the image default because it is what an unconfigured
+# deploy needs to come up with a current schema. It is INCOMPATIBLE with
+# ENVIRONMENT=production, which fails validation unless AUTO_MIGRATE=false — set
+# both together, out of band, per docs/RAILWAY.md. Do not flip this default to
+# false on its own: that turns a loud boot failure into silent schema drift.
+# GIN_MODE=release also marks this as a deployed runtime, which is what makes
+# config.HardenedRuntime enforce fail-closed RBAC even with ENVIRONMENT unset.
 ENV PORT=4008 AUTO_MIGRATE=true LOG_FORMAT=json AUTH_MODE=gateway GIN_MODE=release
 EXPOSE 4008
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 CMD ["/app/healthcheck"]

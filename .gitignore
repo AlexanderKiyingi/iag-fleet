@@ -6,3 +6,6 @@
 .env
 tok.json
 backend.exe
+
+# Legacy standalone prototype, kept locally for reference only.
+HAULA_Fleet_v7.html

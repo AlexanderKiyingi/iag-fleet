@@ -36,9 +36,23 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Fetch Fleet_IoT (iag-telemetry-gateway) for the go.mod replace
+      # Check out the SAME commit the Dockerfile pins, not main. Testing against
+      # main meant a stale FLEET_IOT_REF was invisible here: the pin sat three
+      # commits behind while CI stayed green, so the deployed image silently
+      # lost fix-source tagging and the ingest authz hardening. Reading the ref
+      # out of the Dockerfile keeps the two from drifting again.
+      - name: Fetch Fleet_IoT (iag-telemetry-gateway) at the pinned ref
         run: |
-          git clone --depth 1 --branch main https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git /tmp/deps/Fleet_IoT
+          set -euo pipefail
+          FLEET_IOT_REF="$(sed -n 's/^ARG FLEET_IOT_REF=//p' Dockerfile | head -1)"
+          if [ -z "$FLEET_IOT_REF" ]; then
+            echo "could not read ARG FLEET_IOT_REF from Dockerfile" >&2
+            exit 1
+          fi
+          echo "Building against fleet-iot @ $FLEET_IOT_REF (pinned in Dockerfile)"
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git /tmp/deps/Fleet_IoT
+          git -C /tmp/deps/Fleet_IoT checkout "$FLEET_IOT_REF"
           go mod edit -replace=github.com/iag/fleet-iot=/tmp/deps/Fleet_IoT
 
       - name: Point platform-go replace at vendored third_party copy
