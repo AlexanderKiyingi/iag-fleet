@@ -22,7 +22,7 @@ FROM base AS fleet-iot-clone
 # live-map payload; the column is written by SyncVehicleFromPing inside
 # fleet-iot, so the API served an empty string in production until the bump to
 # 61b50de. Ingest authz hardening (6e6292b) was likewise undeployed.
-ARG FLEET_IOT_REF=61b50de
+ARG FLEET_IOT_REF=60feffe
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
