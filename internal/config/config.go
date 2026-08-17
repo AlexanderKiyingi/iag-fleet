@@ -58,15 +58,33 @@ type Config struct {
 	// unless the caller holds the gate-override permission, in which case the
 	// bypass is audit-logged. Off by default: gates stay independent until set.
 	GateOrderingEnabled bool
+
+	// EnvironmentExplicit records whether ENVIRONMENT/APP_ENV was actually set,
+	// as opposed to falling back to the "development" default. The distinction
+	// matters for the runtime safeguards below: an unset value on a deployed
+	// instance must not be read as a deliberate "this is a dev box".
+	EnvironmentExplicit bool
+
+	// Deployed reports that this process looks like a hosted instance rather
+	// than a laptop — Railway's injected vars, or gin in release mode (which
+	// the Dockerfile sets). Mirrors the signal internal/db uses to reject
+	// localhost DSNs.
+	Deployed bool
 }
 
 // Load reads configuration from env. Hard cutover: no AUTH_MODE, no
 // GATEWAY_INTERNAL_SECRET — every inbound request must carry a verifiable
 // Bearer token with aud=iag.fleet.
 func Load() (Config, error) {
-	env := strings.ToLower(strings.TrimSpace(envOr("ENVIRONMENT", envOr("APP_ENV", "development"))))
+	rawEnv := strings.TrimSpace(envOr("ENVIRONMENT", envOr("APP_ENV", "")))
+	env := strings.ToLower(rawEnv)
+	if env == "" {
+		env = "development"
+	}
 	issuer := envOr("JWT_ISSUER", "http://localhost:3001")
 	cfg := Config{
+		EnvironmentExplicit: rawEnv != "",
+		Deployed:            deployedRuntime(),
 		Addr:                 ListenAddr(),
 		Environment:          env,
 		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
@@ -159,15 +177,62 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// IsProduction gates BOOT-TIME validation (see Validate). It stays strictly
+// opt-in via ENVIRONMENT so that a misread signal can never refuse to start a
+// running deployment. Runtime safeguards use HardenedRuntime instead.
 func (c Config) IsProduction() bool {
 	return c.Environment == "production" || c.Environment == "prod"
 }
 
+// isDevLike reports an environment where fail-open behaviour is a deliberate
+// convenience rather than an accident.
+func (c Config) isDevLike() bool {
+	switch c.Environment {
+	case "development", "dev", "local", "test":
+		return true
+	}
+	return false
+}
+
+// HardenedRuntime reports whether production safeguards apply: fail-closed
+// RBAC, and the demo-only endpoints (reset_data, simulate_vehicles) refusing to
+// run.
+//
+// It deliberately does NOT reuse IsProduction. That rule required
+// ENVIRONMENT=production, which docs/RAILWAY.md never told anyone to set — so a
+// hosted instance defaulted to "development" and ran fail-OPEN, where
+// auth.HasPerm grants a permissionless token every permission there is,
+// reset_data included. An unset ENVIRONMENT on a deployed instance now hardens
+// instead; only an explicit dev-like value opts out.
+//
+// Unlike the Validate checks this can't prevent boot — the worst case is a
+// token that previously got god-mode by accident now getting 403.
+func (c Config) HardenedRuntime() bool {
+	// An explicit production value always hardens, including on a Config built
+	// by hand rather than through Load. Anything else would make the safe
+	// setting depend on a bookkeeping flag the caller didn't know to set.
+	if c.IsProduction() {
+		return true
+	}
+	if c.EnvironmentExplicit {
+		return !c.isDevLike()
+	}
+	return c.Deployed
+}
+
 // StrictRBAC denies access when JWT permissions are empty (fail-closed).
-// Production always enforces strict RBAC; dev allows empty permissions for
-// easier local iteration.
 func (c Config) StrictRBAC() bool {
-	return c.IsProduction()
+	return c.HardenedRuntime()
+}
+
+// deployedRuntime distinguishes a hosted instance from a laptop. Same signal as
+// internal/db's localhost-DSN check; GIN_MODE=release is set by the Dockerfile,
+// so anything built from it counts.
+func deployedRuntime() bool {
+	if os.Getenv("RAILWAY_ENVIRONMENT") != "" || os.Getenv("RAILWAY_PROJECT_ID") != "" {
+		return true
+	}
+	return strings.EqualFold(os.Getenv("GIN_MODE"), "release")
 }
 
 func (c Config) HasWildcardCORS() bool {
