@@ -322,8 +322,8 @@ func (c *Collection[T, PT]) Update(ctx context.Context, id string, patch func(*T
 	if err != nil {
 		return zero, err
 	}
-	defer rows.Close()
 	if !rows.Next() {
+		rows.Close()
 		if err := rows.Err(); err != nil {
 			return zero, err
 		}
@@ -331,6 +331,16 @@ func (c *Collection[T, PT]) Update(ctx context.Context, id string, patch func(*T
 	}
 	var updated T
 	if err := scanInto(rows, c.columns, &updated); err != nil {
+		rows.Close()
+		return zero, err
+	}
+	// Close before COMMIT, not via defer. An open pgx Rows owns the connection
+	// for the rest of the function, so committing underneath it fails the whole
+	// update with "conn busy" — every call, not just contended ones. BulkAdd and
+	// BulkReplace already close explicitly at the end of each iteration; this
+	// path was the one that didn't.
+	rows.Close()
+	if err := rows.Err(); err != nil {
 		return zero, err
 	}
 	if err := tx.Commit(ctx); err != nil {
