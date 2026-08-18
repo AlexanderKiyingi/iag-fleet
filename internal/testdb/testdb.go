@@ -20,6 +20,16 @@ import (
 )
 
 // Pool connects using TEST_DATABASE_URL or skips the test.
+//
+// The returned pool holds an exclusive advisory lock on the test database for
+// the lifetime of the test, released by the cleanup func.
+//
+// That is not belt-and-braces: `go test ./...` runs packages in PARALLEL, and
+// every package using this helper truncates the same shared tables. Without the
+// lock, one package's TruncateRegistry deletes rows another package's test just
+// committed, and the suite fails intermittently in whichever test happened to be
+// mid-flight. Serializing here is correct rather than merely convenient —
+// these tests share one database and cannot be concurrent by construction.
 func Pool(t *testing.T) (*pgxpool.Pool, func()) {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -36,10 +46,38 @@ func Pool(t *testing.T) (*pgxpool.Pool, func()) {
 		pool.Close()
 		t.Fatalf("ping: %v", err)
 	}
+
+	// Held on its own connection so the pool stays free for the test itself.
+	// The wait is unbounded by design: blocking behind another package is the
+	// intended behaviour, and a timeout here would just reintroduce the race.
+	lockConn, err := pool.Acquire(context.Background())
+	if err != nil {
+		pool.Close()
+		t.Fatalf("acquire exclusive test-database lock: %v", err)
+	}
+	if _, err := lockConn.Exec(context.Background(),
+		"SELECT pg_advisory_lock($1)", exclusiveTestLockKey); err != nil {
+		lockConn.Release()
+		pool.Close()
+		t.Fatalf("lock test database: %v", err)
+	}
+	release := func() {
+		unlockCtx, cancelUnlock := context.WithTimeout(context.Background(), 10*time.Second)
+		_, _ = lockConn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", exclusiveTestLockKey)
+		cancelUnlock()
+		lockConn.Release()
+		pool.Close()
+	}
+
 	EnsureMigrated(t, pool)
 	TruncateRegistry(t, pool)
-	return pool, func() { pool.Close() }
+	return pool, release
 }
+
+// exclusiveTestLockKey serializes whole integration tests across packages;
+// migrationLockKey only serializes the migration step. Distinct keys so a test
+// holding the database does not deadlock against its own EnsureMigrated call.
+const exclusiveTestLockKey int64 = 0x1A6F1E57
 
 // migrationLockKey namespaces the advisory lock EnsureMigrated serializes on.
 // Arbitrary but must be stable across packages.
