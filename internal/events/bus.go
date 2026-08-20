@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -262,7 +263,11 @@ func (b *Bus) DispatchOutbox(ctx context.Context, eventType, eventKey string, pa
 // service subscribes to iag.fleet and converts these alerts into dispatch
 // calls — fleet no longer writes to iag.notifications directly.
 func (b *Bus) PublishFleetAlert(ctx context.Context, channel, recipient, templateID string, variables map[string]string) {
-	if !b.enabled || recipient == "" || templateID == "" {
+	if !b.enabled || templateID == "" {
+		return
+	}
+	if recipient == "" {
+		warnNoNotifyRecipient()
 		return
 	}
 	vars := map[string]any{}
@@ -334,4 +339,16 @@ func ValidateEnvelope(evt PlatformEvent) error {
 		return fmt.Errorf("type and source required")
 	}
 	return nil
+}
+
+var notifyRecipientWarnOnce sync.Once
+
+// warnNoNotifyRecipient logs once when an alert is dropped for want of a
+// recipient. Without it an unset NOTIFY_DEFAULT_RECIPIENT is indistinguishable
+// from "no alerts were raised": the emitter returns early, nothing reaches the
+// notifications service, and no error appears anywhere.
+func warnNoNotifyRecipient() {
+	notifyRecipientWarnOnce.Do(func() {
+		slog.Warn("fleet alert dropped: no recipient and NOTIFY_DEFAULT_RECIPIENT is unset; fleet.alert.raised events will not be emitted")
+	})
 }
