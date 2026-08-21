@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -351,7 +352,46 @@ func (f *FuelRequests) approve(c *gin.Context) {
 	}
 	f.Repo.LogBest(ctx, action, "fuel_request", id, body.Notes, user)
 	f.emitApproved(ctx, updated, user)
+	f.notifyFuelDecision(ctx, updated)
 	c.JSON(http.StatusOK, updated)
+}
+
+// notifyFuelDecision emails the requester the outcome of their fuel request.
+//
+// The domain event emitted alongside this (fleet.fuel_request.approved) exists
+// for procurement's sourcing bridge, not for people — so before this, a
+// requester learned nothing either way. fleet.alert.raised only fires from the
+// signal scanner at "crit" severity, which an approval never reaches.
+//
+// CreatedBy is a user id, so the address comes from the notifications store;
+// when it cannot be resolved the fleet desk stands in, with the requester
+// named in the body. Best effort — the decision is committed either way.
+func (f *FuelRequests) notifyFuelDecision(ctx context.Context, req models.FuelRequest) {
+	if f.Events == nil || !f.Events.Enabled() {
+		return
+	}
+	recipient := ""
+	if req.CreatedBy != "" && f.Repo != nil && f.Repo.Notifications != nil {
+		if email, err := f.Repo.Notifications.RecipientEmail(ctx, req.CreatedBy); err == nil {
+			recipient = strings.TrimSpace(email)
+		}
+	}
+	if recipient == "" {
+		recipient = events.DefaultNotifyRecipient()
+	}
+	if recipient == "" {
+		return
+	}
+	outcome := req.Status // "approved" or "rejected"
+	body := fmt.Sprintf("Fuel request %s for %.2f litres (%s) raised by %s was %s.",
+		req.ID, req.RequestedLitres, req.Station, req.RequesterName, outcome)
+	if strings.TrimSpace(req.ReviewerNotes) != "" {
+		body += " Reason: " + req.ReviewerNotes
+	}
+	f.Events.PublishFleetAlert(ctx, "email", recipient, "approval.decision", map[string]string{
+		"Title": "Fuel request " + outcome + ": " + req.ID,
+		"Body":  body,
+	})
 }
 
 // ─────────────────────────────── cancel ─────────────────────────────────

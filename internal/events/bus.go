@@ -352,3 +352,10 @@ func warnNoNotifyRecipient() {
 		slog.Warn("fleet alert dropped: no recipient and NOTIFY_DEFAULT_RECIPIENT is unset; fleet.alert.raised events will not be emitted")
 	})
 }
+
+// DefaultNotifyRecipient is the fleet desk address used when a notification
+// has no specific user to address (or the requester's email cannot be
+// resolved). Empty means such notifications are skipped.
+func DefaultNotifyRecipient() string {
+	return strings.TrimSpace(os.Getenv("NOTIFY_DEFAULT_RECIPIENT"))
+}
