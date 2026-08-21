@@ -60,7 +60,7 @@ RUN set -eu; \
         -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} \
         -replace=github.com/alvor-technologies/iag-platform-go=${PLATFORM_GO_DEP}; \
     mkdir -p /out; \
-    for cmd in . ./cmd/seed ./cmd/fleet-jobs ./cmd/telemetry-aggregate ./cmd/telemetry-purge ./cmd/healthcheck; do \
+    for cmd in . ./cmd/migrate ./cmd/seed ./cmd/fleet-jobs ./cmd/telemetry-aggregate ./cmd/telemetry-purge ./cmd/healthcheck; do \
         name=$(basename $cmd); [ "$name" = "." ] && name=api; \
         CGO_ENABLED=0 GOOS=linux go build -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
@@ -84,7 +84,7 @@ RUN set -eu; \
         -replace=github.com/iag/fleet-iot=${FLEET_IOT_DEP} \
         -replace=github.com/alvor-technologies/iag-platform-go=${PLATFORM_GO_DEP}; \
     mkdir -p /out; \
-    for cmd in . ./cmd/seed ./cmd/fleet-jobs ./cmd/telemetry-aggregate ./cmd/telemetry-purge ./cmd/healthcheck; do \
+    for cmd in . ./cmd/migrate ./cmd/seed ./cmd/fleet-jobs ./cmd/telemetry-aggregate ./cmd/telemetry-purge ./cmd/healthcheck; do \
         name=$(basename $cmd); [ "$name" = "." ] && name=api; \
         CGO_ENABLED=0 GOOS=linux go build -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \

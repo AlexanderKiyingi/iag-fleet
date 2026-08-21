@@ -12,7 +12,7 @@ Use this before enabling Fleet in staging/production.
 | Auth | `JWT_ISSUER`, `JWKS_URL`, `AUDIENCE=iag.fleet` | Mutating API returns 401 without Bearer |
 | Service account | `SERVICE_CLIENT_SECRET` (≥16 chars) | Startup log: permissions registered |
 | Environment | `ENVIRONMENT=production` | `reset_data` / `simulate_vehicles` return 403 |
-| Migrations | `AUTO_MIGRATE=false` | Run `db/migrations` out of band |
+| Migrations | `AUTO_MIGRATE=false` | Run `/app/migrate` before starting the API; `/app/migrate -dry-run` reports 0 pending afterwards |
 | Kafka publish | `EVENT_BUS_ENABLED=true`, `KAFKA_BROKERS` | Vehicle create emits `fleet.vehicle.created` via outbox |
 | Redis | `REDIS_URL` when Fleet API and Fleet_IoT are separate processes | SSE `/api/fleet-live/stream` receives pings |
 

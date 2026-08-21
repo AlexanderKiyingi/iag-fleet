@@ -55,8 +55,35 @@ changes run out of band, not on the startup path of every replica. Pick one:
 
 | Setup | `ENVIRONMENT` | `AUTO_MIGRATE` | Migrations run by |
 |---|---|---|---|
-| Recommended | `production` | `false` | `db/migrations` applied out of band before the deploy |
+| Recommended | `production` | `false` | `/app/migrate`, before the API starts |
 | Convenience | *(unset)* | `true` | The service, on each boot |
+
+### Running migrations out of band
+
+The image ships `/app/migrate` alongside the API. It applies any pending
+migrations and exits, and it is the thing the recommended row above refers to —
+until it existed, "run migrations out of band" had nothing to run, which made
+the recommended configuration impossible to actually follow.
+
+```sh
+/app/migrate -dry-run   # report what would be applied; changes nothing
+/app/migrate            # apply
+```
+
+**Deploy order is: migrate, then start the API.** Both steps read the same
+`DATABASE_URL`; the migrate command needs nothing else, so it can run as a
+Railway pre-deploy command, a one-off job, or from a shell on any host that can
+reach the database.
+
+It is safe to run when there is nothing pending, and safe to run twice —
+migrations are recorded by version with a checksum, so a second run applies
+nothing and says so. The dry run also fails loudly if an already-applied
+migration file has been edited, which is the failure you want to discover
+before a deploy rather than during one.
+
+If a run fails partway, the migrations it already applied are committed and the
+failing one is rolled back; the command names both, and re-running continues
+from where it stopped.
 
 Historically this doc recommended the second row and never mentioned
 `ENVIRONMENT` at all, which had a consequence well beyond migrations:

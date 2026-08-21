@@ -45,6 +45,52 @@ type Migration struct {
 	Checksum string // sha256 hex
 }
 
+// Status reports which migrations are already recorded and which are pending,
+// without touching the schema.
+//
+// It exists so a deploy can be inspected before it changes anything —
+// "what is this about to do to production" should be answerable without
+// running it. It also creates the bookkeeping table if absent, so a first run
+// against a fresh database reports every migration as pending rather than
+// failing on a missing relation.
+func Status(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) (applied, pending []string, err error) {
+	migs, err := load(fsys)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := pool.Exec(ctx, schemaMigrationsDDL); err != nil {
+		return nil, nil, fmt.Errorf("ensure schema_migrations: %w", err)
+	}
+	recorded, err := loadApplied(ctx, pool)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, m := range migs {
+		if prev, ok := recorded[m.Version]; ok {
+			// A checksum mismatch means the file changed after being applied.
+			// Report it here rather than letting Up fail mid-deploy, so the
+			// dry run is the thing that catches an edited migration.
+			if prev.Checksum != m.Checksum {
+				return nil, nil, fmt.Errorf(
+					"migration %s was already applied but its contents have changed "+
+						"(recorded %s, on disk %s) — forward-only migrations must never be edited",
+					m.Version, short(prev.Checksum), short(m.Checksum))
+			}
+			applied = append(applied, m.Version)
+			continue
+		}
+		pending = append(pending, m.Version)
+	}
+	return applied, pending, nil
+}
+
+func short(sum string) string {
+	if len(sum) > 12 {
+		return sum[:12]
+	}
+	return sum
+}
+
 // Up reads every *.sql file in fsys, sorts them, and applies any not yet
 // recorded in schema_migrations. Returns the list of versions applied
 // during this call (empty when the database is already up-to-date).
