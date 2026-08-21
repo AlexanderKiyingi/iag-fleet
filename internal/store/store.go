@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -65,11 +64,11 @@ type Collection[T any, PT IdentifiablePtr[T]] struct {
 	updateSet    string // "plate=$1, ..., mech_status=$N" for UPDATE (excludes id)
 	updateIDIdx  int    // 1-based parameter index for the WHERE id = $N
 
-	// muTx serializes concurrent Update calls on the same key to keep the
-	// in-memory patch + write atomic. Read-modify-write goes through a
-	// real DB transaction with SELECT FOR UPDATE; this mutex just makes
-	// the surrounding Go code simpler.
-	muTx sync.Mutex
+	// colType maps column name → the Postgres type to cast a filter
+	// PARAMETER to in ListFiltered. Casting the parameter keeps the column
+	// bare so its index is usable; casting the column (the old `col::text
+	// = $1`) made every filtered list a sequential scan.
+	colType map[string]string
 }
 
 // NewCollection inspects T's `db` tags to build the SQL column list and
@@ -77,7 +76,10 @@ type Collection[T any, PT IdentifiablePtr[T]] struct {
 // error (no `db:"id"` field, duplicate columns) — these are bugs at startup,
 // not runtime conditions.
 func NewCollection[T any, PT IdentifiablePtr[T]](pool *pgxpool.Pool, table string) *Collection[T, PT] {
-	c := &Collection[T, PT]{pool: pool, table: table, idIndex: -1, updateIDIdx: 0}
+	c := &Collection[T, PT]{
+		pool: pool, table: table, idIndex: -1, updateIDIdx: 0,
+		colType: map[string]string{},
+	}
 
 	var zero T
 	rt := reflect.TypeOf(zero)
@@ -106,6 +108,7 @@ func NewCollection[T any, PT IdentifiablePtr[T]](pool *pgxpool.Pool, table strin
 			c.idIndex = len(c.columns)
 		}
 		c.columns = append(c.columns, ci)
+		c.colType[col] = filterCastFor(f.Type, ci.dbCast)
 	}
 	if c.idIndex < 0 {
 		panic(fmt.Sprintf("store: model %s has no `db:\"id\"` field", rt.Name()))
@@ -172,8 +175,71 @@ func buildSelectExpr(cols []columnInfo) string {
 	return strings.Join(parts, ", ")
 }
 
+// filterCastFor returns the Postgres type a ListFiltered parameter is cast to
+// for this model field, or "" for text-ish columns that need no cast at all.
+//
+// The parameter is cast, never the column: `speed_limit_kmh = $1::double
+// precision` can use an index on that column, while the old
+// `speed_limit_kmh::text = $1` could not and forced a sequential scan with a
+// per-row cast on every filtered list in the service.
+func filterCastFor(ft reflect.Type, dbCast string) string {
+	switch dbCast {
+	case "date":
+		return "date"
+	case "timestamptz":
+		// Date and timestamp columns are read back through to_char, so callers
+		// filter them as the text the API hands out, not as a timestamp.
+		return ""
+	case "uuid":
+		return "uuid"
+	}
+	if ft.Kind() == reflect.Ptr {
+		ft = ft.Elem()
+	}
+	switch ft.Kind() {
+	case reflect.Bool:
+		return "boolean"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "bigint"
+	case reflect.Float32, reflect.Float64:
+		return "double precision"
+	default:
+		// Strings, JSONB Scanner types and anything else compare as text.
+		return ""
+	}
+}
+
+// filterValueValid reports whether val can be cast to pgType. A filter the
+// database would reject (`?axles=abc`) must return an empty page, not a 500 —
+// and not silently widen the result by being dropped either.
+func filterValueValid(pgType, val string) bool {
+	switch pgType {
+	case "boolean":
+		_, err := strconv.ParseBool(val)
+		return err == nil
+	case "bigint":
+		_, err := strconv.ParseInt(val, 10, 64)
+		return err == nil
+	case "double precision":
+		_, err := strconv.ParseFloat(val, 64)
+		return err == nil
+	default:
+		// date and uuid are left to Postgres: both accept several spellings
+		// and duplicating their parsers here would reject valid input.
+		return true
+	}
+}
+
 // ───────────────────────────── CRUD methods ─────────────────────────────
 
+// List returns every row in the table, unbounded. That is deliberate and it is
+// for internal callers that genuinely need the whole set — the admin export
+// snapshot, a migration, a reconciliation job.
+//
+// Do NOT reach for it from an HTTP read path. A request handler wants
+// ListFiltered, which paginates; an endpoint that can return an unbounded
+// response gets slower every month and is a denial-of-service surface besides.
 func (c *Collection[T, PT]) List(ctx context.Context) ([]T, error) {
 	rows, err := c.pool.Query(ctx,
 		"SELECT "+c.selectExpr+" FROM "+c.table+" ORDER BY id DESC")
@@ -183,6 +249,34 @@ func (c *Collection[T, PT]) List(ctx context.Context) ([]T, error) {
 	defer rows.Close()
 
 	var out []T
+	for rows.Next() {
+		var item T
+		if err := scanInto(rows, c.columns, &item); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ListCapped returns at most limit rows, newest id first, and runs no COUNT.
+//
+// This is what a flat-array read path wants: List's ordering and shape, a hard
+// bound, and none of ListFiltered's pagination total — which the caller would
+// have nowhere to put anyway. A caller that gets exactly limit rows back should
+// assume there are more.
+func (c *Collection[T, PT]) ListCapped(ctx context.Context, limit int) ([]T, error) {
+	if limit <= 0 {
+		limit = listDefaultLimit
+	}
+	rows, err := c.pool.Query(ctx,
+		"SELECT "+c.selectExpr+" FROM "+c.table+" ORDER BY id DESC LIMIT $1", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]T, 0, limit)
 	for rows.Next() {
 		var item T
 		if err := scanInto(rows, c.columns, &item); err != nil {
@@ -212,6 +306,33 @@ func (c *Collection[T, PT]) Get(ctx context.Context, id string) (T, error) {
 		return zero, err
 	}
 	return item, nil
+}
+
+// GetMany fetches every row whose id is in ids, keyed by id. Ids with no row
+// are simply absent from the map — the caller decides whether that is an error.
+//
+// One query, not one per id: the serial Get loop this replaced cost a full
+// round trip per element, so a 1000-id bulk patch spent 1000 sequential trips
+// before the first write.
+func (c *Collection[T, PT]) GetMany(ctx context.Context, ids []string) (map[string]T, error) {
+	out := make(map[string]T, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := c.pool.Query(ctx,
+		"SELECT "+c.selectExpr+" FROM "+c.table+" WHERE id = ANY($1)", ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item T
+		if err := scanInto(rows, c.columns, &item); err != nil {
+			return nil, err
+		}
+		out[PT(&item).GetID()] = item
+	}
+	return out, rows.Err()
 }
 
 // Add inserts the supplied item and returns the row Postgres saw — preserving
@@ -280,9 +401,12 @@ func (c *Collection[T, PT]) Replace(ctx context.Context, id string, item T) (T, 
 // stage_history append, etc).
 func (c *Collection[T, PT]) Update(ctx context.Context, id string, patch func(*T)) (T, error) {
 	var zero T
-	c.muTx.Lock()
-	defer c.muTx.Unlock()
-
+	// No Go-side lock here on purpose. The SELECT ... FOR UPDATE below already
+	// serializes concurrent writers against this row, which is the guarantee
+	// read-modify-write needs. A mutex on the Collection serialized every row
+	// in the table — not just the contended one — for the full duration of a
+	// four-round-trip transaction, capping the service's write throughput at
+	// roughly 1/(4×RTT) per table regardless of how many rows were involved.
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
 		return zero, err
@@ -495,7 +619,17 @@ type ListFilter struct {
 const (
 	listDefaultLimit = 100
 	listMaxLimit     = 1000
+
+	// CountCap bounds the pagination total. ListFiltered stops counting here,
+	// so a total equal to CountCap means "at least this many" rather than
+	// "exactly this many" — TotalIsCapped reports which.
+	CountCap = 10000
 )
+
+// TotalIsCapped reports whether a total returned by ListFiltered hit CountCap
+// and is therefore a floor rather than an exact count. Handlers surface this
+// so a client can render "10,000+" instead of a wrong exact figure.
+func TotalIsCapped(total int) bool { return total >= CountCap }
 
 // ListFiltered runs a paginated, filtered query against the collection.
 // Returns (page, total) where total is the count of rows matching the
@@ -525,20 +659,34 @@ func (c *Collection[T, PT]) ListFiltered(ctx context.Context, f ListFilter) ([]T
 		if _, ok := known[col]; !ok {
 			continue // silently drop unknown filter keys
 		}
+		cast := c.colType[col]
+		if !filterValueValid(cast, val) {
+			// The value cannot be the column's type, so nothing can match it.
+			// Answering empty beats a 500 from a failed cast, and beats
+			// dropping the filter — which would return MORE rows than asked for.
+			return []T{}, 0, nil
+		}
 		args = append(args, val)
-		conds = append(conds, fmt.Sprintf("%s::text = $%d", col, len(args)))
+		if cast == "" {
+			conds = append(conds, fmt.Sprintf("%s = $%d", col, len(args)))
+		} else {
+			conds = append(conds, fmt.Sprintf("%s = $%d::%s", col, len(args), cast))
+		}
 	}
 	where := ""
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ")
 	}
 
-	// Count first (cheap with the existing indexes; same args, no
-	// limit/offset). The same predicate gates both queries so total
-	// reflects the filter even when the caller paginates.
+	// COUNT(*) always scans in Postgres — index-only at best, and a full
+	// sequential scan on an unfiltered append-only table like api_audit.
+	// Stop counting at CountCap: the scan is bounded, and a pager cannot
+	// use "2.4 million" for anything a "10000+" does not also serve.
+	// total == CountCap means "at least this many" — see TotalIsCapped.
 	var total int
 	if err := c.pool.QueryRow(ctx,
-		"SELECT COUNT(*) FROM "+c.table+where, args...,
+		"SELECT COUNT(*) FROM (SELECT 1 FROM "+c.table+where+
+			" LIMIT "+strconv.Itoa(CountCap)+") capped", args...,
 	).Scan(&total); err != nil {
 		return nil, 0, err
 	}

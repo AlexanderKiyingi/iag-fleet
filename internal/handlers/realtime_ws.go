@@ -36,6 +36,10 @@ type RealtimeWS struct {
 	Hub    *iot.Hub
 	Store  *iot.Store            // optional: latest-ping seed for track
 	Broker *notifications.Broker // optional: bell wake-ups
+	// Snap is the process-wide fleet snapshot. nil disables the "fleet"
+	// channel rather than falling back to per-connection queries — the
+	// fallback is what this field exists to remove.
+	Snap *FleetSnapshotter
 	// AllowedOrigin is the CORS origin permitted to upgrade; "" or "*" allows any.
 	AllowedOrigin string
 }
@@ -200,17 +204,20 @@ func (h *RealtimeWS) writePump(ctx context.Context, ws *websocket.Conn, out <-ch
 }
 
 // runFleet emits an initial full snapshot, then one updated vehicle per live ping.
+//
+// Both come from the shared FleetSnapshotter, so this connection issues no
+// query of its own. It used to run a full `Vehicles.List` on connect and a
+// `Vehicles.Get` for every ping it forwarded — with N sockets open and P pings
+// a second that was N×P point reads on top of N full scans, for data the
+// snapshot already holds and the ping itself already carries.
 func (h *RealtimeWS) runFleet(ctx context.Context, send func(any)) func() {
-	if h.Repo != nil {
-		if vs, err := h.Repo.Vehicles.List(ctx); err == nil {
-			snaps := make([]fleetVehicleSnap, 0, len(vs))
-			for _, v := range vs {
-				snaps = append(snaps, vehicleSnap(v))
-			}
-			send(map[string]any{"type": "fleet", "payload": fleetPayload{
-				GeneratedAt: time.Now().UTC().Format(time.RFC3339), Vehicles: snaps,
-			}})
-		}
+	if h.Snap == nil {
+		return func() {}
+	}
+	if vs := h.Snap.Vehicles(); len(vs) > 0 {
+		send(map[string]any{"type": "fleet", "payload": fleetPayload{
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339), Vehicles: vs,
+		}})
 	}
 	if h.Hub == nil {
 		return func() {}
@@ -225,16 +232,27 @@ func (h *RealtimeWS) runFleet(ctx context.Context, send func(any)) func() {
 				if !ok {
 					return
 				}
-				if p.VehicleID == "" || h.Repo == nil {
+				if p.VehicleID == "" {
 					continue
 				}
-				v, err := h.Repo.Vehicles.Get(ctx, p.VehicleID)
-				if err != nil {
+				// Take the identity fields from the snapshot and the position
+				// from the ping in hand. This goroutine and the snapshotter are
+				// independent hub subscribers, so there is no ordering between
+				// them — reading the position back out of the snapshot could
+				// forward the PREVIOUS fix. The ping already carries the new one.
+				v, known := h.Snap.Vehicle(p.VehicleID)
+				if !known {
+					// An id the snapshot has never seen: skip rather than emit
+					// a row with no plate. The next refresh introduces it.
 					continue
+				}
+				v.Lat, v.Lng = p.Lat, p.Lng
+				if p.Heading != nil {
+					v.Heading = *p.Heading
 				}
 				send(map[string]any{"type": "fleet", "payload": fleetPayload{
 					GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-					Vehicles:    []fleetVehicleSnap{vehicleSnap(v)},
+					Vehicles:    []fleetVehicleSnap{v},
 				}})
 			}
 		}

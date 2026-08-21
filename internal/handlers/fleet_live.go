@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -20,6 +19,10 @@ type FleetLive struct {
 	Repo *store.Repository
 	Hub  *iot.Hub
 	Gate *StreamGate // optional: caps concurrent SSE streams; nil = unlimited
+	// Snap is the process-wide snapshot every connection reads from. Required:
+	// without it each connection would go back to running its own poll, which
+	// is the thing this field exists to prevent.
+	Snap *FleetSnapshotter
 }
 
 func (h *FleetLive) Register(rg *gin.RouterGroup) {
@@ -61,82 +64,53 @@ func (h *FleetLive) stream(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	snapsByID := make(map[string]fleetVehicleSnap)
 
-	emitAll := func() {
-		snaps := make([]fleetVehicleSnap, 0, len(snapsByID))
-		for _, s := range snapsByID {
-			snaps = append(snaps, s)
-		}
-		b, err := json.Marshal(fleetPayload{
-			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-			Vehicles:    snaps,
-		})
-		if err != nil {
+	// Everything below reads the process-wide snapshot. This connection issues
+	// no query of its own — not on connect, not on a timer, not on a ping.
+	changed, unsubscribe := h.Snap.Subscribe()
+	defer unsubscribe()
+
+	var sentVersion uint64
+	emitIfNew := func() {
+		payload, version, _ := h.Snap.Current()
+		if version == sentVersion || len(payload) == 0 {
 			return
 		}
-		fmt.Fprintf(c.Writer, "event: fleet\ndata: %s\n\n", b)
+		// payload is immutable once published, so writing it without holding a
+		// lock is safe and a slow client cannot stall the refresh loop.
+		fmt.Fprintf(c.Writer, "event: fleet\ndata: %s\n\n", payload)
 		flusher.Flush()
+		sentVersion = version
 	}
 
-	loadAll := func() error {
-		vs, err := h.Repo.Vehicles.List(ctx)
-		if err != nil {
-			return err
-		}
-		for _, v := range vs {
-			snapsByID[v.ID] = vehicleSnap(v)
-		}
-		emitAll()
-		return nil
-	}
+	emitIfNew() // initial paint, straight from memory
 
-	_ = loadAll() // initial paint; subsequent failures surface on the ticker
-	var pollFails int
-
-	var liveCh <-chan iot.Ping
-	var liveCancel func()
-	if h.Hub != nil {
-		liveCh, liveCancel = h.Hub.SubscribeLive()
-		defer liveCancel()
-	}
-
-	// Fallback poll between sparse events or when ingest runs in another process without Redis.
-	tick := time.NewTicker(3 * time.Second)
+	// The keep-alive tick is now only a keep-alive: it proves the connection is
+	// alive to any proxy in between and re-checks the token. Data arrives on
+	// `changed` instead of being polled for.
+	tick := time.NewTicker(25 * time.Second)
 	defer tick.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case p, ok := <-liveCh:
-			if !ok {
-				liveCh = nil
-				continue
+		case <-changed:
+			// A refresh failure also signals, so check health before writing.
+			if _, _, fails := h.Snap.Current(); fails >= maxConsecutivePollFails {
+				sseEvent(c.Writer, flusher, "error", `{"reason":"fleet state temporarily unavailable"}`)
+				return
 			}
-			if p.VehicleID == "" {
-				continue
-			}
-			if v, err := h.Repo.Vehicles.Get(ctx, p.VehicleID); err == nil {
-				snapsByID[v.ID] = vehicleSnap(v)
-				emitAll()
-			}
+			emitIfNew()
 		case <-tick.C:
 			// Close once the bearer token lapses so a stream can't outlive its auth.
 			if tokenExpired(expiry, time.Now()) {
 				sseEvent(c.Writer, flusher, "expired", `{"reason":"token expired; reconnect"}`)
 				return
 			}
-			if err := loadAll(); err != nil {
-				// Surface and close after a run of failures rather than streaming
-				// keep-alives over a dead DB connection forever.
-				pollFails++
-				if pollFails >= maxConsecutivePollFails {
-					sseEvent(c.Writer, flusher, "error", `{"reason":"fleet state temporarily unavailable"}`)
-					return
-				}
-			} else {
-				pollFails = 0
+			if _, _, fails := h.Snap.Current(); fails >= maxConsecutivePollFails {
+				sseEvent(c.Writer, flusher, "error", `{"reason":"fleet state temporarily unavailable"}`)
+				return
 			}
 			fmt.Fprintf(c.Writer, ": keep-alive\n\n")
 			flusher.Flush()

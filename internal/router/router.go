@@ -58,6 +58,11 @@ type Options struct {
 	// procurement-status enrichment.
 	Procurement *procurementclient.Client
 	Platform    platform.Services
+	// Lifecycle bounds the background goroutines New starts (currently the
+	// shared fleet snapshot). Defaults to context.Background(); pass a
+	// cancellable context from main so they stop on shutdown, and from tests
+	// so they do not outlive the case that built the router.
+	Lifecycle context.Context
 }
 
 // New builds the gin engine, attaches middleware, and registers all routes.
@@ -194,7 +199,17 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// One shared gate caps total concurrent SSE streams (track + fleet-live)
 	// across the service (FLEET_MAX_SSE_STREAMS, default 1000).
 	streamGate := handlers.NewStreamGate()
-	(&handlers.FleetLive{Repo: repo, Hub: opts.IoTHub, Gate: streamGate}).Register(api)
+
+	// One snapshot for the whole process, not one poll per connection. See
+	// handlers.FleetSnapshotter for why: the per-connection version made the
+	// live map's database cost scale with viewers rather than with fleet size.
+	lifecycle := opts.Lifecycle
+	if lifecycle == nil {
+		lifecycle = context.Background()
+	}
+	fleetSnap := handlers.NewFleetSnapshotter(repo, opts.IoTHub, 3*time.Second, nil)
+	go fleetSnap.Run(lifecycle)
+	(&handlers.FleetLive{Repo: repo, Hub: opts.IoTHub, Gate: streamGate, Snap: fleetSnap}).Register(api)
 
 	// Notifications. Always register so the route table matches the
 	// frontend's expectations even if the producer ticker isn't started
@@ -208,7 +223,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// Unified realtime WebSocket: multiplexes fleet positions, per-vehicle track,
 	// and the notification bell over one connection (GET /api/realtime/ws).
 	(&handlers.RealtimeWS{
-		Repo: repo, Hub: opts.IoTHub, Store: opts.IoTStore,
+		Repo: repo, Hub: opts.IoTHub, Store: opts.IoTStore, Snap: fleetSnap,
 		Broker: notifBroker, AllowedOrigin: opts.AllowedOrigin,
 	}).Register(api)
 

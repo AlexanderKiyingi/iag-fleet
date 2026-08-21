@@ -95,14 +95,31 @@ func (r *Resource[T, PT]) Register(rg *gin.RouterGroup, base string) {
 // server side.
 const maxBulkItems = 1000
 
+// listFlatMaxRows bounds the flat-array GET /<base>.
+//
+// The endpoint predates /search and still answers with a bare array, so it has
+// no envelope to carry a "there is more" flag — which is exactly why it needed
+// a bound and never got one. On append-only tables (trips, fuel, api_audit) an
+// unbounded array grows forever, and the CSV exporters and the Next.js store
+// that use it both slow down every month.
+//
+// The cap is set well above any real page and the response says when it bites,
+// via X-Result-Truncated, so a truncated export is detectable rather than
+// silently short. Callers that want more paginate through /search.
+const listFlatMaxRows = 5000
+
 func (r *Resource[T, PT]) list(c *gin.Context) {
-	items, err := r.Collection.List(c.Request.Context())
+	items, err := r.Collection.ListCapped(c.Request.Context(), listFlatMaxRows)
 	if err != nil {
 		respondError(c, err)
 		return
 	}
 	if items == nil {
 		items = []T{}
+	}
+	if len(items) == listFlatMaxRows {
+		c.Header("X-Result-Truncated", "true")
+		c.Header("X-Result-Limit", strconv.Itoa(listFlatMaxRows))
 	}
 	c.JSON(http.StatusOK, items)
 }
@@ -303,19 +320,25 @@ func (r *Resource[T, PT]) bulkPatch(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	// Read each existing row, apply the merge, and collect the merged
-	// items. We do the reads serially before the BulkReplace so a
-	// missing-id error rolls back nothing — the tx hasn't started yet.
+	// Read the existing rows in ONE query, then merge in memory. Reading
+	// before the BulkReplace is what keeps a missing-id error from rolling
+	// anything back — the tx hasn't started yet — and that property does not
+	// require reading them one at a time.
+	existingByID, err := r.Collection.GetMany(ctx, body.IDs)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
 	merged := make([]T, 0, len(body.IDs))
 	before := make([]T, 0, len(body.IDs))
+	// Iterate body.IDs, not the map: BulkReplace returns rows in the order it
+	// was given them, and `before[i]` has to line up with `updated[i]` below.
+	// Reporting the FIRST missing id also matches what the serial loop did.
 	for _, id := range body.IDs {
-		existing, err := r.Collection.Get(ctx, id)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "not found", "id": id})
-				return
-			}
-			respondError(c, err)
+		existing, ok := existingByID[id]
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found", "id": id})
 			return
 		}
 		m, err := mergeJSON(existing, body.Patch)

@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 	"time"
-
-	"github.com/iag/fleet-tool/backend/internal/models"
 )
 
 // ComplianceExpiringWithinDays is the window before expiry that maps to status=expiring.
@@ -33,25 +31,37 @@ func ComplianceStatusFromExpiry(expiry string, today time.Time, expiringWithinDa
 
 // RecomputeComplianceStatuses updates compliance_items.status from expiry dates.
 // Returns the number of rows whose status changed.
+//
+// One set-based UPDATE, not a read of the whole table followed by a separate
+// read-modify-write transaction per drifted row. On a day when many documents
+// roll over at once — which is the normal case, since renewals cluster — the
+// old shape issued hundreds of sequential transactions and took minutes.
+//
+// The CASE below is ComplianceStatusFromExpiry expressed in SQL, and
+// TestComplianceStatusSQLMatchesGo pins the two together: a NULL or unparseable
+// expiry is "missing", a past expiry is "expired", one inside the window is
+// "expiring", anything further out is "valid". The `IS DISTINCT FROM` guard
+// keeps the write to rows that actually changed, so an idempotent re-run costs
+// one scan and no writes.
 func (r *Repository) RecomputeComplianceStatuses(ctx context.Context) (int, error) {
-	items, err := r.Compliance.List(ctx)
+	const q = `
+        UPDATE compliance_items SET status = derived.want
+        FROM (
+            SELECT id,
+                   CASE
+                       WHEN expiry IS NULL THEN 'missing'
+                       WHEN expiry < (NOW() AT TIME ZONE 'UTC')::date THEN 'expired'
+                       WHEN expiry <= (NOW() AT TIME ZONE 'UTC')::date + ($1::int * INTERVAL '1 day')
+                            THEN 'expiring'
+                       ELSE 'valid'
+                   END AS want
+            FROM compliance_items
+        ) AS derived
+        WHERE compliance_items.id = derived.id
+          AND compliance_items.status IS DISTINCT FROM derived.want`
+	tag, err := r.pool.Exec(ctx, q, ComplianceExpiringWithinDays)
 	if err != nil {
 		return 0, err
 	}
-	today := time.Now().UTC()
-	updated := 0
-	for _, item := range items {
-		want := ComplianceStatusFromExpiry(item.Expiry, today, ComplianceExpiringWithinDays)
-		if item.Status == want {
-			continue
-		}
-		id := item.ID
-		if _, err := r.Compliance.Update(ctx, id, func(ci *models.ComplianceItem) {
-			ci.Status = want
-		}); err != nil {
-			return updated, err
-		}
-		updated++
-	}
-	return updated, nil
+	return int(tag.RowsAffected()), nil
 }
