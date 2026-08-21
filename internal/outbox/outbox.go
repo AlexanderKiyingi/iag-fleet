@@ -186,25 +186,68 @@ func NewPublisher(store *Store, d Dispatcher) *Publisher {
 	}
 }
 
+// outboxIdleBackoffMax bounds how far the poll interval stretches when the
+// outbox is empty.
+//
+// Each poll is a write transaction — FOR UPDATE SKIP LOCKED plus
+// UPDATE ... RETURNING — issued whether or not there is anything to send. Across
+// the services that run one of these, a fixed two-second tick is a constant
+// floor of write traffic and WAL against the one shared Postgres, for a table
+// that is empty most of the time.
+//
+// The cost of the backoff is latency on the FIRST event after a quiet spell:
+// up to this long. It is kept deliberately short for that reason — a drain that
+// finds anything resets to p.tick immediately, so a busy outbox keeps its
+// original latency and only genuinely idle periods stretch out.
+//
+// The real fix is LISTEN/NOTIFY: the enqueue side signals, this side wakes
+// immediately, and an idle outbox costs nothing at all. That needs a dedicated
+// connection per service and is a larger change than this one.
+const outboxIdleBackoffMax = 8 * time.Second
+
+// nextOutboxInterval doubles the poll interval towards outboxIdleBackoffMax.
+func nextOutboxInterval(current, base time.Duration) time.Duration {
+	if current < base {
+		current = base
+	}
+	if next := current * 2; next < outboxIdleBackoffMax {
+		return next
+	}
+	return outboxIdleBackoffMax
+}
+
 func (p *Publisher) Run(ctx context.Context) {
 	if p == nil || p.store == nil || p.dispatcher == nil {
 		return
 	}
-	ticker := time.NewTicker(p.tick)
-	defer ticker.Stop()
+	// A timer rather than a ticker, so the interval can adapt — see
+	// outboxIdleBackoffMax.
+	interval := p.tick
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			n, err := p.drainOnce(ctx)
-			if err != nil {
+			switch {
+			case err != nil:
 				slog.Warn("outbox drain", "err", err)
-				continue
+				// Back off on failure too: retrying a failing drain every two
+				// seconds mostly multiplies whatever load is causing it.
+				interval = nextOutboxInterval(interval, p.tick)
+			case n > 0:
+				if n >= p.batch {
+					_, _ = p.drainOnce(ctx)
+				}
+				// There was work, so there is probably more: go straight back
+				// to the base interval.
+				interval = p.tick
+			default:
+				interval = nextOutboxInterval(interval, p.tick)
 			}
-			if n >= p.batch {
-				_, _ = p.drainOnce(ctx)
-			}
+			timer.Reset(interval)
 		}
 	}
 }

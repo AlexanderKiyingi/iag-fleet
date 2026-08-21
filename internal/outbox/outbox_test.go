@@ -97,3 +97,45 @@ func TestDrainDeadLettersAtMaxAttempts(t *testing.T) {
 		t.Fatalf("dead-lettered row must not also be MarkFailed, got %v", s.failed)
 	}
 }
+
+// The adaptive poll interval trades a little latency on the first event after a
+// quiet spell for a large cut in idle write traffic against the shared
+// Postgres. These pin both halves of that trade.
+func TestNextOutboxInterval(t *testing.T) {
+	base := 2 * time.Second
+
+	// Doubles while idle...
+	if got := nextOutboxInterval(base, base); got != 4*time.Second {
+		t.Errorf("first idle step = %v, want 4s", got)
+	}
+	if got := nextOutboxInterval(4*time.Second, base); got != 8*time.Second {
+		t.Errorf("second idle step = %v, want 8s", got)
+	}
+
+	// ...but never past the cap, however long the outbox stays quiet. An
+	// unbounded backoff would eventually make the first event of the morning
+	// arrive minutes late.
+	interval := base
+	for i := 0; i < 50; i++ {
+		interval = nextOutboxInterval(interval, base)
+	}
+	if interval != outboxIdleBackoffMax {
+		t.Errorf("settled at %v, want the %v cap", interval, outboxIdleBackoffMax)
+	}
+
+	// A caller that somehow passes an interval below base must not be dragged
+	// below the configured tick.
+	if got := nextOutboxInterval(time.Millisecond, base); got < base {
+		t.Errorf("interval %v fell below the base tick %v", got, base)
+	}
+}
+
+// The cap has to stay short: it is added latency on a user-visible path when a
+// service has been quiet. If someone raises it, this should make them think.
+func TestOutboxIdleBackoffStaysShort(t *testing.T) {
+	if outboxIdleBackoffMax > 10*time.Second {
+		t.Errorf("idle backoff cap is %v — that is how late the first event "+
+			"after a quiet period can be; keep it under 10s or move to LISTEN/NOTIFY",
+			outboxIdleBackoffMax)
+	}
+}
