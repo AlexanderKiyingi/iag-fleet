@@ -52,6 +52,36 @@ type Config struct {
 	ProcurementAudience           string
 	ProcurementIntegrationEnabled bool
 
+	// FuelAuthorizationGateEnabled makes fulfilment wait for procurement to
+	// finish AUTHORIZING the commitment. Without it, fulfil checks only that
+	// the fuel request is approved in fleet, so a caller holding
+	// add_fuel_record commits spend of any size without the GM (>= 5,000,000)
+	// or CEO (>= 20,000,000) desk signing — bands that exist and bind on the
+	// requisition procurement imports for this request.
+	//
+	// Authorization, not payment. Procurement's requisition chain encumbers
+	// budget and ends at "Approved for Procurement"; migration 022 removed its
+	// money desk precisely because that chain disburses nothing. Fuel is
+	// routinely bought on credit, so waiting for payment would ground vehicles
+	// over an invoice that is not due yet — and the chain cannot reach a paid
+	// state anyway.
+	//
+	// Off by default, and inert unless ProcurementIntegrationEnabled: turning
+	// the read-only bridge on must not start refusing fulfilments as a side
+	// effect.
+	FuelAuthorizationGateEnabled bool
+
+	// FuelAuthorizationFailOpen decides what happens when procurement cannot be
+	// reached while the gate is on. Fail-open logs and lets the fulfilment
+	// through; fail-closed refuses it.
+	//
+	// Defaults to fail-OPEN, which is the opposite of how a money control
+	// usually reads. A procurement outage would otherwise stop every vehicle in
+	// the fleet from taking fuel, and a stranded truck is a worse and more
+	// immediate failure than a band bypass that the audit trail still records.
+	// Set false to require a reachable procurement.
+	FuelAuthorizationFailOpen bool
+
 	// GateOrderingEnabled turns on SOFT status-ordering for the dispatch chain
 	// and the JMP gates: out-of-order transitions (deploy before approval,
 	// approving an assignment before the request is approved, completing or
@@ -111,6 +141,10 @@ func Load() (Config, error) {
 		ProcurementBaseURL:            strings.TrimRight(strings.TrimSpace(envOr("PROCUREMENT_BASE_URL", "http://localhost:4009")), "/"),
 		ProcurementAudience:           strings.TrimSpace(envOr("PROCUREMENT_AUDIENCE", "iag.procurement")),
 		ProcurementIntegrationEnabled: strings.EqualFold(os.Getenv("PROCUREMENT_INTEGRATION_ENABLED"), "true"),
+
+		FuelAuthorizationGateEnabled: strings.EqualFold(os.Getenv("FUEL_AUTHORIZATION_GATE_ENABLED"), "true"),
+		// Absent means fail-open; only an explicit "false" makes it fail-closed.
+		FuelAuthorizationFailOpen: !strings.EqualFold(os.Getenv("FUEL_AUTHORIZATION_FAIL_OPEN"), "false"),
 
 		GateOrderingEnabled: strings.EqualFold(os.Getenv("GATE_ORDERING_ENABLED"), "true"),
 	}

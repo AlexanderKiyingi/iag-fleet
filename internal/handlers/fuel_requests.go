@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/auth"
+	"github.com/iag/fleet-tool/backend/internal/config"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/procurementclient"
@@ -29,6 +31,7 @@ type FuelRequests struct {
 	Events      *events.Bus
 	records     *FuelRecords
 	procurement *procurementclient.Client
+	cfg         config.Config
 }
 
 // NewFuelRequests wires the handler. records is the same *FuelRecords mounted
@@ -37,7 +40,7 @@ type FuelRequests struct {
 // duplicated here. procurement is the optional iag-procurement client (nil when
 // the integration is disabled) used to reconcile a request against the sourcing
 // requisition procurement imports from the approval event.
-func NewFuelRequests(repo *store.Repository, bus *events.Bus, records *FuelRecords, procurement *procurementclient.Client) *FuelRequests {
+func NewFuelRequests(repo *store.Repository, bus *events.Bus, records *FuelRecords, procurement *procurementclient.Client, cfg config.Config) *FuelRequests {
 	f := &FuelRequests{
 		inner: Resource[models.FuelRequest, *models.FuelRequest]{
 			Repo:       repo,
@@ -49,6 +52,7 @@ func NewFuelRequests(repo *store.Repository, bus *events.Bus, records *FuelRecor
 		Events:      bus,
 		records:     records,
 		procurement: procurement,
+		cfg:         cfg,
 	}
 	f.inner.BeforeCreate = f.beforeCreate
 	f.inner.BeforeUpdate = f.beforeUpdate
@@ -85,6 +89,73 @@ func (f *FuelRequests) Register(rg *gin.RouterGroup) {
 	// its assignment. Mounted on the parent group alongside the other
 	// /requests/:id/* dispatch-chain workflows (assign, create-jmp, deploy).
 	rg.POST("/requests/:id/request-fuel", add, f.createFromRequest)
+}
+
+// procurementAuthorizedStatuses are the terminals of procurement's requisition
+// chain — the point at which every desk the request's value engaged has signed
+// and the commitment is authorized.
+//
+// "Approved for Procurement" is the live terminal. The other two are terminals
+// of earlier revisions of the same chain (migration 020 seeded a Finance desk
+// stamping "Paid"; 021 renamed it "Payment Authorized" because nothing was
+// being paid; 022 removed it), accepted so a requisition raised before those
+// migrations is not stranded. None of them ever meant cash had moved.
+var procurementAuthorizedStatuses = map[string]bool{
+	"approved for procurement": true,
+	"approved":                 true,
+	"payment authorized":       true,
+	"paid":                     true,
+}
+
+// commitmentAuthorized reports whether fulfilment may proceed, writing the HTTP
+// error itself when it may not.
+//
+// Fleet's own approval authorizes the vehicle, driver and litres. It does not
+// authorize the spend: procurement imports an approved fuel request as a
+// sourcing requisition and walks it through PM -> Accounts Assistant -> GM
+// (>= 5,000,000) -> CEO (>= 20,000,000), encumbering the budget. Without this
+// check a caller holding add_fuel_record commits any amount without those desks.
+//
+// Deliberately NOT a payment check. Fuel is routinely bought on credit and the
+// requisition chain disburses nothing; waiting for payment would ground
+// vehicles over an invoice that is not due.
+func (f *FuelRequests) commitmentAuthorized(c *gin.Context, id string) bool {
+	if !f.cfg.FuelAuthorizationGateEnabled || f.procurement == nil {
+		return true
+	}
+
+	reqn, err := f.procurement.GetRequisitionByOrigin(c.Request.Context(), id)
+	if errors.Is(err, procurementclient.ErrRequisitionNotFound) {
+		// No requisition for this request: either the bridge has not processed
+		// the approval event yet, or this request predates the integration.
+		// There is no chain to wait for, so fleet's approval is the only
+		// authorization there is and it stands.
+		return true
+	}
+	if err != nil {
+		if f.cfg.FuelAuthorizationFailOpen {
+			// A procurement outage must not stop a fleet taking fuel. The
+			// bypass is recorded rather than silent.
+			slog.Warn("procurement unreachable; allowing fuel fulfilment (fail-open)",
+				"fuelRequest", id, "err", err)
+			return true
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "cannot confirm procurement authorization for this request",
+		})
+		return false
+	}
+
+	if procurementAuthorizedStatuses[strings.ToLower(strings.TrimSpace(reqn.Status))] {
+		return true
+	}
+	c.JSON(http.StatusConflict, gin.H{
+		"error":              "procurement has not authorized this commitment yet",
+		"requisitionId":      reqn.ID,
+		"procurementStatus":  reqn.Status,
+		"requiredAuthorized": "Approved for Procurement",
+	})
+	return false
 }
 
 // createFromRequestBody carries the fuel-specific fields the service request
@@ -461,6 +532,9 @@ func (f *FuelRequests) fulfill(c *gin.Context) {
 			"error":        "request already fulfilled",
 			"fuelRecordId": req.FuelRecordID,
 		})
+		return
+	}
+	if !f.commitmentAuthorized(c, req.ID) {
 		return
 	}
 

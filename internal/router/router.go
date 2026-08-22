@@ -155,7 +155,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	fuelRecords := handlers.NewFuelRecords(repo, opts.Events)
 	fuelRecords.Register(api, "/fuel")
-	handlers.NewFuelRequests(repo, opts.Events, fuelRecords, opts.Procurement).Register(api)
+	handlers.NewFuelRequests(repo, opts.Events, fuelRecords, opts.Procurement, opts.Config).Register(api)
 
 	(&handlers.Resource[models.MaintenanceItem, *models.MaintenanceItem]{
 		Repo: repo, Collection: repo.Maintenance, Entity: "maintenance_item", IDPrefix: "MX",
