@@ -190,24 +190,6 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	(&handlers.Admin{Repo: repo, Cache: opts.Cache, Config: opts.Config}).Register(api)
 	(&handlers.Reference{Cache: opts.Cache, TTL: opts.TTLReference}).Register(api)
 	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL, Config: opts.Config, Warehouse: opts.Warehouse}).Register(api)
-	// Driver-vehicle authorisation matrix (FR-DRV-04). The taxonomy is
-	// user-maintained rather than compiled in: which permit class may operate
-	// which category is a licensing question whose answer differs by country.
-	(&handlers.Resource[models.VehicleCategory, *models.VehicleCategory]{
-		Repo: repo, Collection: repo.VehicleCategories,
-		Entity: "vehicle_category", IDPrefix: "VCAT",
-	}).Register(api, "/vehicle-categories")
-
-	(&handlers.Resource[models.PermitClass, *models.PermitClass]{
-		Repo: repo, Collection: repo.PermitClasses,
-		Entity: "permit_class", IDPrefix: "PCLS",
-	}).Register(api, "/permit-classes")
-
-	(&handlers.Resource[models.PermitClassAuthorisation, *models.PermitClassAuthorisation]{
-		Repo: repo, Collection: repo.PermitAuths,
-		Entity: "permit_class_authorisation", IDPrefix: "PAUT",
-	}).Register(api, "/permit-authorisations")
-
 	(&handlers.Inspections{Repo: repo}).Register(api)
 	(&handlers.PMSchedules{Repo: repo, Events: opts.Events}).Register(api)
 	(&handlers.Dashboard{Repo: repo, Cache: opts.Cache, TTL: opts.TTLDashboard}).Register(api)

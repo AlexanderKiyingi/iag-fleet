@@ -22,9 +22,6 @@ var crudEntities = []string{
 	"safety_event", "compliance_item", "service_request",
 	"task_item", "deployment_day", "fuel_record", "fuel_request",
 	"inspection_template", "vehicle_inspection", "pm_schedule",
-	// Driver-vehicle authorisation matrix (FR-DRV-04). User-maintained
-	// taxonomy, so it gets the same CRUD permission set as any other entity.
-	"vehicle_category", "permit_class", "permit_class_authorisation",
 }
 
 var workflowPermissions = []PermissionDescriptor{

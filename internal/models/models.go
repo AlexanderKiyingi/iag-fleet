@@ -47,58 +47,42 @@ func (d Driver) GetID() string    { return d.ID }
 func (d *Driver) SetID(id string) { d.ID = id }
 
 type Vehicle struct {
-	ID             string   `json:"id"                       db:"id"`
-	Plate          string   `json:"plate"                    db:"plate"`
-	Type           string   `json:"type"                     db:"type"`
-	Make           string   `json:"make"                     db:"make"`
-	Model          string   `json:"model"                    db:"model"`
-	Year           int      `json:"year"                     db:"year"`
-	VehicleClass   string   `json:"vehicleClass"             db:"vehicle_class"`
-	Ownership      string   `json:"ownership"                db:"ownership"`
-	Vin            string   `json:"vin,omitempty"            db:"vin"`
-	Color          string   `json:"color,omitempty"          db:"color"`
-	SeatCapacity   *int     `json:"seatCapacity,omitempty"   db:"seat_capacity"`
-	Transmission   string   `json:"transmission,omitempty"   db:"transmission"`
-	EngineCapacity string   `json:"engineCapacity,omitempty" db:"engine_capacity"`
-	DriveHand      string   `json:"driveHand,omitempty"      db:"drive_hand"`
-	PurchaseDate   string   `json:"purchaseDate,omitempty"   db:"purchase_date" dbcast:"date"`
-	Mileage        *float64 `json:"mileage,omitempty"        db:"mileage"`
-	DriverID       string   `json:"driverId,omitempty"       db:"driver_id"`
-	Status         string   `json:"status"                   db:"status"`
-	Location       string   `json:"location"                 db:"location"`
-	Lat            float64  `json:"lat"                      db:"lat"`
-	Lng            float64  `json:"lng"                      db:"lng"`
-	Heading        float64  `json:"heading"                  db:"heading"`
-	LastFixSource  string   `json:"lastFixSource"            db:"last_fix_source"`
-	Fuel           float64  `json:"fuel"                     db:"fuel"`
-	Odo            float64  `json:"odo"                      db:"odo"`
-	Capacity       string   `json:"capacity"                 db:"capacity"`
-	Cargo          string   `json:"cargo,omitempty"          db:"cargo"`
-	LastSeen       string   `json:"lastSeen"                 db:"last_seen"        dbcast:"timestamptz" dbdefault:"true"`
-	Telematics     string   `json:"telematics,omitempty"     db:"telematics"`
-	FuelTracker    bool     `json:"fuelTracker"              db:"fuel_tracker"`
-	Dashcam        *bool    `json:"dashcam,omitempty"        db:"dashcam"`
-	NextServiceKm  float64  `json:"nextServiceKm"            db:"next_service_km"`
-	Speed          float64  `json:"speed"                    db:"speed"`
-	EngineHours    *float64 `json:"engineHours,omitempty"    db:"engine_hours"`
-	Purpose        string   `json:"purpose,omitempty"        db:"purpose"`
-	MechStatus     string   `json:"mechStatus"               db:"mech_status"`
-	// CategoryID is the dispatch-rule classification (FR-DRV-04). Distinct from
-	// Type, which is free text and carries brand names.
-	CategoryID string `json:"categoryId,omitempty"      db:"category_id"`
-	// Asset lifecycle (PRD FR-VEH-06). Distinct from Status, which is live
-	// operational state written by telemetry and read by dispatch validation,
-	// and from MechStatus, which is mechanical condition. This one moves
-	// because a person decided something.
-	LifecycleState  string `json:"lifecycleState"            db:"lifecycle_state"  dbdefault:"true"`
-	LifecycleReason string `json:"lifecycleReason,omitempty" db:"lifecycle_reason" dbdefault:"true"`
-	LifecycleAt     string `json:"lifecycleAt,omitempty"     db:"lifecycle_at"     dbcast:"timestamptz"`
-	LifecycleBy     string `json:"lifecycleBy,omitempty"     db:"lifecycle_by"     dbdefault:"true"`
-	// Disposal detail (FR-VEH-10), so an ERP retirement can say how and for how much.
-	DisposalMethod     string   `json:"disposalMethod,omitempty"   db:"disposal_method"  dbdefault:"true"`
-	DisposalDate       string   `json:"disposalDate,omitempty"     db:"disposal_date"    dbcast:"date"`
-	DisposalProceeds   *float64 `json:"disposalProceeds,omitempty" db:"disposal_proceeds"`
-	DisposalBuyer      string   `json:"disposalBuyer,omitempty"    db:"disposal_buyer"   dbdefault:"true"`
+	ID                 string   `json:"id"                       db:"id"`
+	Plate              string   `json:"plate"                    db:"plate"`
+	Type               string   `json:"type"                     db:"type"`
+	Make               string   `json:"make"                     db:"make"`
+	Model              string   `json:"model"                    db:"model"`
+	Year               int      `json:"year"                     db:"year"`
+	VehicleClass       string   `json:"vehicleClass"             db:"vehicle_class"`
+	Ownership          string   `json:"ownership"                db:"ownership"`
+	Vin                string   `json:"vin,omitempty"            db:"vin"`
+	Color              string   `json:"color,omitempty"          db:"color"`
+	SeatCapacity       *int     `json:"seatCapacity,omitempty"   db:"seat_capacity"`
+	Transmission       string   `json:"transmission,omitempty"   db:"transmission"`
+	EngineCapacity     string   `json:"engineCapacity,omitempty" db:"engine_capacity"`
+	DriveHand          string   `json:"driveHand,omitempty"      db:"drive_hand"`
+	PurchaseDate       string   `json:"purchaseDate,omitempty"   db:"purchase_date" dbcast:"date"`
+	Mileage            *float64 `json:"mileage,omitempty"        db:"mileage"`
+	DriverID           string   `json:"driverId,omitempty"       db:"driver_id"`
+	Status             string   `json:"status"                   db:"status"`
+	Location           string   `json:"location"                 db:"location"`
+	Lat                float64  `json:"lat"                      db:"lat"`
+	Lng                float64  `json:"lng"                      db:"lng"`
+	Heading            float64  `json:"heading"                  db:"heading"`
+	LastFixSource      string   `json:"lastFixSource"            db:"last_fix_source"`
+	Fuel               float64  `json:"fuel"                     db:"fuel"`
+	Odo                float64  `json:"odo"                      db:"odo"`
+	Capacity           string   `json:"capacity"                 db:"capacity"`
+	Cargo              string   `json:"cargo,omitempty"          db:"cargo"`
+	LastSeen           string   `json:"lastSeen"                 db:"last_seen"        dbcast:"timestamptz" dbdefault:"true"`
+	Telematics         string   `json:"telematics,omitempty"     db:"telematics"`
+	FuelTracker        bool     `json:"fuelTracker"              db:"fuel_tracker"`
+	Dashcam            *bool    `json:"dashcam,omitempty"        db:"dashcam"`
+	NextServiceKm      float64  `json:"nextServiceKm"            db:"next_service_km"`
+	Speed              float64  `json:"speed"                    db:"speed"`
+	EngineHours        *float64 `json:"engineHours,omitempty"    db:"engine_hours"`
+	Purpose            string   `json:"purpose,omitempty"        db:"purpose"`
+	MechStatus         string   `json:"mechStatus"               db:"mech_status"`
 	Alert              string   `json:"alert,omitempty"          db:"alert"`
 	TankCapacityLitres *int     `json:"tankCapacityLitres,omitempty" db:"tank_capacity_litres"`
 	// CostCenter is the finance bucket warehouse stock issues raised on this
@@ -280,48 +264,6 @@ type MaintenancePartLine struct {
 // each line decrements parts.stock and writes an "out" movement
 // referencing this WO.
 type MaintenancePartLines []MaintenancePartLine
-
-// VehicleCategory is a user-maintained classification a dispatch rule can read.
-// Distinct from Vehicle.Type, which is free text carrying brand names.
-type VehicleCategory struct {
-	ID          string `json:"id"                    db:"id"`
-	Name        string `json:"name"                  db:"name"`
-	Code        string `json:"code,omitempty"        db:"code"          dbdefault:"true"`
-	Description string `json:"description,omitempty" db:"description"   dbdefault:"true"`
-	Active      bool   `json:"active"                db:"active"`
-	CreatedAt   string `json:"createdAt,omitempty"   db:"created_at"    dbcast:"timestamptz" dbdefault:"true"`
-}
-
-func (v VehicleCategory) GetID() string    { return v.ID }
-func (v *VehicleCategory) SetID(id string) { v.ID = id }
-
-// PermitClass is a driving-licence class as the licensing authority writes it.
-// The set is maintained by the operator: it is a legal taxonomy that differs by
-// country, so it is configured rather than compiled in.
-type PermitClass struct {
-	ID          string `json:"id"                    db:"id"`
-	Code        string `json:"code"                  db:"code"`
-	Name        string `json:"name,omitempty"        db:"name"          dbdefault:"true"`
-	Description string `json:"description,omitempty" db:"description"   dbdefault:"true"`
-	Active      bool   `json:"active"                db:"active"`
-	CreatedAt   string `json:"createdAt,omitempty"   db:"created_at"    dbcast:"timestamptz" dbdefault:"true"`
-}
-
-func (p PermitClass) GetID() string    { return p.ID }
-func (p *PermitClass) SetID(id string) { p.ID = id }
-
-// PermitClassAuthorisation is one cell of the driver-vehicle matrix: this
-// permit class may operate this vehicle category (PRD FR-DRV-04).
-type PermitClassAuthorisation struct {
-	ID            string `json:"id"                  db:"id"`
-	PermitClassID string `json:"permitClassId"       db:"permit_class_id"`
-	CategoryID    string `json:"categoryId"          db:"category_id"`
-	Notes         string `json:"notes,omitempty"     db:"notes"       dbdefault:"true"`
-	CreatedAt     string `json:"createdAt,omitempty" db:"created_at"  dbcast:"timestamptz" dbdefault:"true"`
-}
-
-func (a PermitClassAuthorisation) GetID() string    { return a.ID }
-func (a *PermitClassAuthorisation) SetID(id string) { a.ID = id }
 
 type StatusHistoryEvent struct {
 	At     string `json:"at"`
