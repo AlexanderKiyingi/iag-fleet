@@ -274,6 +274,14 @@ func validateRequestAssignment(ctx context.Context, repo *store.Repository, req 
 		if err := validateDriverDispatch(ctx, repo, req.AssignedDriverID); err != nil {
 			return err
 		}
+		// FR-DRV-04. Fails open on an unconfigured matrix, an unclassified
+		// vehicle or a driver with no permit class recorded — see
+		// driver_authorisation.go for why none of those may block.
+		if err := driverAuthorisedForVehicle(
+			ctx, repo, req.AssignedDriverID, req.AssignedVehicleID,
+		); err != nil {
+			return err
+		}
 	}
 	s, e, ok := jmpDateWindow(req.StartDate, req.EndDate)
 	if !ok {

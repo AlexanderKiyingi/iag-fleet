@@ -58,6 +58,12 @@ func validateVehicleDriver(ctx context.Context, repo *store.Repository, v *model
 	if err := validateDriverDispatch(ctx, repo, v.DriverID); err != nil {
 		return err
 	}
+	// FR-DRV-04: the driver's permit class must authorise this vehicle's
+	// category. Fails open when the matrix, the category or the driver's class
+	// is not configured — see driver_authorisation.go.
+	if err := driverAuthorisedForVehicle(ctx, repo, v.DriverID, v.ID); err != nil {
+		return err
+	}
 	// One driver per vehicle: the driver must not already be the assigned driver
 	// of a different vehicle.
 	return validateDriverNotOnAnotherVehicle(ctx, repo, v.DriverID, v.ID)
