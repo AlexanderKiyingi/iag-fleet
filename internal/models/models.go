@@ -74,7 +74,7 @@ type Vehicle struct {
 	Odo                float64  `json:"odo"                      db:"odo"`
 	Capacity           string   `json:"capacity"                 db:"capacity"`
 	Cargo              string   `json:"cargo,omitempty"          db:"cargo"`
-	LastSeen           string   `json:"lastSeen"                 db:"last_seen"        dbcast:"timestamptz"`
+	LastSeen           string   `json:"lastSeen"                 db:"last_seen"        dbcast:"timestamptz" dbdefault:"true"`
 	Telematics         string   `json:"telematics,omitempty"     db:"telematics"`
 	FuelTracker        bool     `json:"fuelTracker"              db:"fuel_tracker"`
 	Dashcam            *bool    `json:"dashcam,omitempty"        db:"dashcam"`
@@ -143,12 +143,12 @@ type JMP struct {
 	IncidentContacts  string   `json:"incidentContacts"         db:"incident_contacts"`
 	ConvoyPartner     string   `json:"convoyPartner"            db:"convoy_partner"`
 	Status            string   `json:"status"                   db:"status"`
-	CreatedAt         string   `json:"createdAt"                db:"created_at"        dbcast:"timestamptz"`
+	CreatedAt         string   `json:"createdAt"                db:"created_at"        dbcast:"timestamptz" dbdefault:"true"`
 	CreatedBy         string   `json:"createdBy"                db:"created_by"`
 	ApprovedBy        string   `json:"approvedBy,omitempty"     db:"approved_by"`
 	ApprovedAt        string   `json:"approvedAt,omitempty"     db:"approved_at"       dbcast:"timestamptz"`
 	CompletedAt       string   `json:"completedAt,omitempty"    db:"completed_at"      dbcast:"timestamptz"`
-	ParkingPhotos     []string `json:"parkingPhotos"            db:"parking_photos"`
+	ParkingPhotos     []string `json:"parkingPhotos"            db:"parking_photos" dbdefault:"true"`
 	SourceRequestID   string   `json:"sourceRequestId,omitempty" db:"source_request_id"`
 	// DispatchStatus is the pre-trip dispatch approval gate (Pending/Approved/
 	// Rejected), distinct from MileageStatus (the post-trip mileage approval).
@@ -195,7 +195,7 @@ type Cargo struct {
 	Demobilised      *bool             `json:"demobilised,omitempty"       db:"demobilised"`
 	DemobilisedAt    string            `json:"demobilisedAt,omitempty"     db:"demobilised_at"    dbcast:"timestamptz"`
 	Remarks          string            `json:"remarks,omitempty"           db:"remarks"`
-	CreatedAt        string            `json:"createdAt"                   db:"created_at"        dbcast:"timestamptz"`
+	CreatedAt        string            `json:"createdAt"                   db:"created_at"        dbcast:"timestamptz" dbdefault:"true"`
 	StageHistory     CargoStageHistory `json:"stageHistory"                db:"stage_history"`
 }
 
@@ -450,7 +450,7 @@ type ServiceRequest struct {
 	PreferredVehicleType string `json:"preferredVehicleType,omitempty" db:"preferred_vehicle_type"`
 	ReviewerNotes        string `json:"reviewerNotes,omitempty"     db:"reviewer_notes"`
 	Status               string `json:"status"                      db:"status"`
-	SubmittedAt          string `json:"submittedAt"                 db:"submitted_at" dbcast:"timestamptz"`
+	SubmittedAt          string `json:"submittedAt"                 db:"submitted_at" dbcast:"timestamptz" dbdefault:"true"`
 	CreatedBy            string `json:"createdBy,omitempty"         db:"created_by"`
 	AssignedVehicleID    string `json:"assignedVehicleId,omitempty" db:"assigned_vehicle_id"`
 	AssignedDriverID     string `json:"assignedDriverId,omitempty"  db:"assigned_driver_id"`
@@ -532,7 +532,7 @@ type TaskItem struct {
 	Priority     string    `json:"priority"            db:"priority"`
 	AssigneeName string    `json:"assigneeName"        db:"assignee_name"`
 	DueDate      string    `json:"dueDate,omitempty"   db:"due_date"     dbcast:"date"`
-	CreatedAt    string    `json:"createdAt"           db:"created_at"   dbcast:"timestamptz"`
+	CreatedAt    string    `json:"createdAt"           db:"created_at"   dbcast:"timestamptz" dbdefault:"true"`
 	CompletedAt  string    `json:"completedAt,omitempty" db:"completed_at" dbcast:"timestamptz"`
 	Source       string    `json:"source"              db:"source"`
 	SourceID     string    `json:"sourceId,omitempty"  db:"source_id"`
@@ -604,7 +604,7 @@ type InspectionTemplate struct {
 	Checklist InspectionChecklist `json:"checklist"       db:"checklist"`
 	Active    bool                `json:"active"          db:"active"`
 	Notes     string              `json:"notes,omitempty" db:"notes"`
-	CreatedAt string              `json:"createdAt"       db:"created_at" dbcast:"timestamptz"`
+	CreatedAt string              `json:"createdAt"       db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
 	// VehicleType scopes a template to a vehicle class (e.g. "Tipper truck").
 	// Optional; the DVIR UI reads it to label/filter templates. Appended last
 	// to match the column added by migration 0028.

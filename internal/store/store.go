@@ -40,7 +40,11 @@ type IdentifiablePtr[T any] interface {
 type columnInfo struct {
 	name     string // db column name
 	fieldIdx int    // reflect.StructField index
-	dbCast   string // "" | "date" | "timestamptz"
+	dbCast   string
+	// hasDefault marks a column the database can fill in. An INSERT that
+	// names the column overrides that default even when the value is the
+	// zero value, so such columns are omitted when nothing was supplied.
+	hasDefault bool // "" | "date" | "timestamptz"
 	// isString is true when the model field's Kind is reflect.String — we
 	// wrap those columns in COALESCE(..., '') on SELECT so a NULL row
 	// doesn't blow up the scan with `cannot scan NULL into *string`.
@@ -61,6 +65,10 @@ type Collection[T any, PT IdentifiablePtr[T]] struct {
 	selectExpr   string // "id, plate, ..., to_char(last_seen, '...') AS last_seen" — used in every SELECT
 	insertCols   string // "id, plate, ..." for INSERT (excludes server-generated columns; we have none)
 	insertParams string // "$1, $2, ..." matching insertCols
+	// anyDefaults is true when at least one column is tagged dbdefault, which
+	// is what makes the per-row insert plan necessary. Collections without one
+	// keep using insertCols/insertParams unchanged.
+	anyDefaults bool
 	updateSet    string // "plate=$1, ..., mech_status=$N" for UPDATE (excludes id)
 	updateIDIdx  int    // 1-based parameter index for the WHERE id = $N
 
@@ -103,6 +111,12 @@ func NewCollection[T any, PT IdentifiablePtr[T]](pool *pgxpool.Pool, table strin
 			fieldIdx: i,
 			dbCast:   f.Tag.Get("dbcast"),
 			isString: f.Type.Kind() == reflect.String,
+			// `dbdefault:"true"` means the column carries a database DEFAULT
+			// that should win when the caller supplied nothing. See insertPlan.
+			hasDefault: f.Tag.Get("dbdefault") == "true",
+		}
+		if ci.hasDefault {
+			c.anyDefaults = true
 		}
 		if col == "id" {
 			c.idIndex = len(c.columns)
@@ -335,16 +349,68 @@ func (c *Collection[T, PT]) GetMany(ctx context.Context, ids []string) (map[stri
 	return out, rows.Err()
 }
 
+// insertPlan builds the column list, placeholders and args for one INSERT,
+// omitting columns the database can fill in when the caller supplied nothing.
+//
+// The generic path names every column, which is correct for a full row and
+// wrong for a partial one: naming a column overrides its DEFAULT, so a nil
+// slice or an empty temporal string writes NULL and the column's own DEFAULT
+// never applies. On a NOT NULL column that is a raw null-violation, and the
+// caller sees a Postgres error rather than the row they asked for. It cost
+// six adapters a hand-written seed value before this existed.
+//
+// Only columns tagged `dbdefault:"true"` participate; collections with none
+// keep the precomputed fast path and behave exactly as before.
+func (c *Collection[T, PT]) insertPlan(item T) (string, string, []any, error) {
+	if !c.anyDefaults {
+		args, err := c.bindArgs(item, false)
+		return c.insertCols, c.insertParams, args, err
+	}
+
+	v := reflect.ValueOf(item)
+	cols := make([]string, 0, len(c.columns))
+	params := make([]string, 0, len(c.columns))
+	args := make([]any, 0, len(c.columns))
+
+	for _, ci := range c.columns {
+		field := v.Field(ci.fieldIdx)
+		// Let the database decide. IsZero covers "" for a timestamp string and
+		// a nil slice for TEXT[]; an explicitly empty non-nil slice is a real
+		// value and is still sent.
+		if ci.hasDefault && field.IsZero() {
+			continue
+		}
+
+		val := field.Interface()
+		// Same translation bindArgs makes: Postgres cannot parse "" as a
+		// temporal value, so an empty optional date becomes NULL.
+		if ci.isString && (ci.dbCast == "date" || ci.dbCast == "timestamptz" || ci.dbCast == "uuid") {
+			if str, ok := val.(string); ok && str == "" {
+				cols = append(cols, ci.name)
+				params = append(params, "$"+strconv.Itoa(len(args)+1))
+				args = append(args, nil)
+				continue
+			}
+		}
+
+		cols = append(cols, ci.name)
+		params = append(params, "$"+strconv.Itoa(len(args)+1))
+		args = append(args, val)
+	}
+
+	return strings.Join(cols, ", "), strings.Join(params, ", "), args, nil
+}
+
 // Add inserts the supplied item and returns the row Postgres saw — preserving
 // any DEFAULT-resolved values (timestamps, NULL → "" coalesces, etc.).
 func (c *Collection[T, PT]) Add(ctx context.Context, item T) (T, error) {
 	var zero T
-	args, err := c.bindArgs(item, false /* skipID = false: full insert */)
+	cols, params, args, err := c.insertPlan(item)
 	if err != nil {
 		return zero, err
 	}
 	rows, err := c.pool.Query(ctx,
-		"INSERT INTO "+c.table+" ("+c.insertCols+") VALUES ("+c.insertParams+
+		"INSERT INTO "+c.table+" ("+cols+") VALUES ("+params+
 			") RETURNING "+c.selectExpr,
 		args...)
 	if err != nil {
@@ -502,15 +568,16 @@ func (c *Collection[T, PT]) BulkAdd(ctx context.Context, items []T) ([]T, error)
 	}
 	defer tx.Rollback(ctx)
 
-	insertSQL := "INSERT INTO " + c.table + " (" + c.insertCols + ") VALUES (" +
-		c.insertParams + ") RETURNING " + c.selectExpr
-
 	out := make([]T, 0, len(items))
 	for i, item := range items {
-		args, err := c.bindArgs(item, false)
+		// Built per row: two rows in one batch may leave different columns to
+		// the database, so a single shared statement cannot serve both.
+		cols, params, args, err := c.insertPlan(item)
 		if err != nil {
 			return nil, fmt.Errorf("row %d: bind: %w", i, err)
 		}
+		insertSQL := "INSERT INTO " + c.table + " (" + cols + ") VALUES (" +
+			params + ") RETURNING " + c.selectExpr
 		rows, err := tx.Query(ctx, insertSQL, args...)
 		if err != nil {
 			return nil, fmt.Errorf("row %d: %w", i, err)
