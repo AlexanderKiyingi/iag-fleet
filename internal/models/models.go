@@ -83,6 +83,19 @@ type Vehicle struct {
 	EngineHours        *float64 `json:"engineHours,omitempty"    db:"engine_hours"`
 	Purpose            string   `json:"purpose,omitempty"        db:"purpose"`
 	MechStatus         string   `json:"mechStatus"               db:"mech_status"`
+	// Asset lifecycle (PRD FR-VEH-06). Distinct from Status, which is live
+	// operational state written by telemetry and read by dispatch validation,
+	// and from MechStatus, which is mechanical condition. This one moves
+	// because a person decided something.
+	LifecycleState    string   `json:"lifecycleState"            db:"lifecycle_state"  dbdefault:"true"`
+	LifecycleReason   string   `json:"lifecycleReason,omitempty" db:"lifecycle_reason" dbdefault:"true"`
+	LifecycleAt       string   `json:"lifecycleAt,omitempty"     db:"lifecycle_at"     dbcast:"timestamptz"`
+	LifecycleBy       string   `json:"lifecycleBy,omitempty"     db:"lifecycle_by"     dbdefault:"true"`
+	// Disposal detail (FR-VEH-10), so an ERP retirement can say how and for how much.
+	DisposalMethod    string   `json:"disposalMethod,omitempty"   db:"disposal_method"  dbdefault:"true"`
+	DisposalDate      string   `json:"disposalDate,omitempty"     db:"disposal_date"    dbcast:"date"`
+	DisposalProceeds  *float64 `json:"disposalProceeds,omitempty" db:"disposal_proceeds"`
+	DisposalBuyer     string   `json:"disposalBuyer,omitempty"    db:"disposal_buyer"   dbdefault:"true"`
 	Alert              string   `json:"alert,omitempty"          db:"alert"`
 	TankCapacityLitres *int     `json:"tankCapacityLitres,omitempty" db:"tank_capacity_litres"`
 	// CostCenter is the finance bucket warehouse stock issues raised on this
