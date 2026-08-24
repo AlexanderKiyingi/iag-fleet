@@ -441,7 +441,12 @@ func (f *FuelRequests) notifyFuelDecision(ctx context.Context, req models.FuelRe
 	if f.Events == nil || !f.Events.Enabled() {
 		return
 	}
+	// A resolved requester is a specific person and carries NO audience: an
+	// audience resolves to whoever an administrator has put on the fleet desk,
+	// which would redirect a personal notification away from the person it is
+	// about. Only the desk fallback is routable.
 	recipient := ""
+	audience := ""
 	if req.CreatedBy != "" && f.Repo != nil && f.Repo.Notifications != nil {
 		if email, err := f.Repo.Notifications.RecipientEmail(ctx, req.CreatedBy); err == nil {
 			recipient = strings.TrimSpace(email)
@@ -449,9 +454,7 @@ func (f *FuelRequests) notifyFuelDecision(ctx context.Context, req models.FuelRe
 	}
 	if recipient == "" {
 		recipient = events.DefaultNotifyRecipient()
-	}
-	if recipient == "" {
-		return
+		audience = "approvals.fleet"
 	}
 	outcome := req.Status // "approved" or "rejected"
 	body := fmt.Sprintf("Fuel request %s for %.2f litres (%s) raised by %s was %s.",
@@ -459,7 +462,7 @@ func (f *FuelRequests) notifyFuelDecision(ctx context.Context, req models.FuelRe
 	if strings.TrimSpace(req.ReviewerNotes) != "" {
 		body += " Reason: " + req.ReviewerNotes
 	}
-	f.Events.PublishFleetAlert(ctx, "email", recipient, "approval.decision", map[string]string{
+	f.Events.PublishFleetAlertTo(ctx, "email", audience, recipient, "approval.decision", map[string]string{
 		"Title": "Fuel request " + outcome + ": " + req.ID,
 		"Body":  body,
 	})

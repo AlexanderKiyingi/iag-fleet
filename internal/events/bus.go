@@ -263,10 +263,19 @@ func (b *Bus) DispatchOutbox(ctx context.Context, eventType, eventKey string, pa
 // service subscribes to iag.fleet and converts these alerts into dispatch
 // calls — fleet no longer writes to iag.notifications directly.
 func (b *Bus) PublishFleetAlert(ctx context.Context, channel, recipient, templateID string, variables map[string]string) {
+	b.PublishFleetAlertTo(ctx, channel, "", recipient, templateID, variables)
+}
+
+// PublishFleetAlertTo addresses a logical audience ("approvals.fleet") whose
+// recipients an administrator maintains centrally, falling back to recipient
+// until that audience is routed. Use it wherever the destination is a desk
+// rather than a specific person — an audience aimed at a named recipient would
+// redirect their notification to whoever is on the desk.
+func (b *Bus) PublishFleetAlertTo(ctx context.Context, channel, audience, recipient, templateID string, variables map[string]string) {
 	if !b.enabled || templateID == "" {
 		return
 	}
-	if recipient == "" {
+	if recipient == "" && audience == "" {
 		warnNoNotifyRecipient()
 		return
 	}
@@ -274,17 +283,21 @@ func (b *Bus) PublishFleetAlert(ctx context.Context, channel, recipient, templat
 	for k, v := range variables {
 		vars[k] = v
 	}
-	evt := PlatformEvent{
-		Type: TypeFleetAlertRaised,
-		Data: map[string]any{
-			"channel":    channel,
-			"recipient":  recipient,
-			"templateId": templateID,
-			"variables":  vars,
-		},
+	data := map[string]any{
+		"channel":    channel,
+		"recipient":  recipient,
+		"templateId": templateID,
+		"variables":  vars,
 	}
-	if err := b.publish(ctx, evt, recipient); err != nil {
-		slog.Warn("fleet.alert.raised publish failed", "recipient", recipient, "err", err)
+	if audience != "" {
+		data["audience"] = audience
+	}
+	key := recipient
+	if key == "" {
+		key = audience
+	}
+	if err := b.publish(ctx, PlatformEvent{Type: TypeFleetAlertRaised, Data: data}, key); err != nil {
+		slog.Warn("fleet.alert.raised publish failed", "recipient", recipient, "audience", audience, "err", err)
 	}
 }
 
