@@ -159,8 +159,12 @@ func (b *Bus) publish(ctx context.Context, evt PlatformEvent, key string) error 
 	if key == "" {
 		key = evt.ID
 	}
+	// No Topic here. fleetWriter is dedicated to TopicFleet and carries it, and
+	// kafka-go rejects a Message that sets Topic when the Writer already has one
+	// ("Topic must not be specified for both Writer and Message"). That error is
+	// returned before anything is sent, so every publish failed, silently from
+	// the caller's side, and the outbox retried until the rows dead-lettered.
 	return b.fleetWriter.WriteMessages(ctx, kafka.Message{
-		Topic: TopicFleet,
 		Key:   []byte(key),
 		Value: body,
 		Headers: []kafka.Header{
