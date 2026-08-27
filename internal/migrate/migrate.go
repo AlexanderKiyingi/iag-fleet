@@ -178,6 +178,29 @@ func seedFromLegacyLedger(ctx context.Context, pool *pgxpool.Pool, migs []Migrat
 	if !hasLegacy {
 		return nil
 	}
+
+	// public.schema_migrations is a SHARED ledger: every service that predates the
+	// per-service cutover wrote its versions into it, unscoped. A version string
+	// found there does not necessarily belong to THIS service - names like
+	// '0001_initial' are used by several of them. Seeding on a bare name match would
+	// stamp a migration as applied that never ran here, and the tables it creates
+	// would silently never exist.
+	//
+	// The cutover this function exists for only makes sense on a database that has
+	// actually run this service before, and such a database necessarily has its
+	// tables. A database with none is either brand new or has never hosted this
+	// service, and its rows in the shared ledger belong to somebody else.
+	var hasOwnTables bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'iag_fleet' AND table_name <> 'schema_migrations'
+		)`).Scan(&hasOwnTables); err != nil {
+		return err
+	}
+	if !hasOwnTables {
+		return nil
+	}
 	for _, m := range migs {
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO iag_fleet.schema_migrations (version, checksum)
