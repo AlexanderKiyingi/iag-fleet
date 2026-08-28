@@ -4,8 +4,6 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,9 +11,9 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/events"
 	"github.com/iag/fleet-tool/backend/internal/models"
@@ -744,25 +742,31 @@ func respondMutationError(c *gin.Context, err error) {
 	respondError(c, err)
 }
 
+// generateID mints a row id.
+//
+// It used to build a readable "VEH-DB70BF84" from a per-entity prefix. Migration
+// 0043 retyped every entity id column to UUID, so a prefixed id is no longer a
+// value those columns can hold — creation failed outright with `invalid input
+// syntax for type uuid: "VEH-DB70BF84"`. The prefix is not recoverable: it was
+// carried in the id itself, and the id is now a uuid.
+//
+// The prefix parameter is kept so the ~18 call sites still read as the entity
+// they create, and because the ids stay client-minted. 0043 also set DEFAULT
+// gen_random_uuid() on those columns, but several callers need the id before
+// the insert — a workflow that creates a JMP and links a request to it in the
+// same transaction cannot wait for RETURNING.
 func generateID(prefix string) string {
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	tail := strings.ToUpper(hex.EncodeToString(b))
-	if prefix == "" {
-		return tail
-	}
-	return prefix + "-" + tail
+	_ = prefix
+	return uuid.NewString()
 }
 
-// generateYearID builds a year-prefixed id like "JMP-2026-A3F7B1". Matches
-// the frontend's uidYear() shape so JMPs / cargo / requests created via
-// workflow endpoints sort and display alongside client-generated ones.
+// generateYearID built a year-prefixed id like "JMP-2026-A3F7B1" so workflow-
+// created rows sorted and displayed alongside client-generated ones. 0043 ended
+// that for the same reason as generateID: the column is a uuid. Kept as its own
+// function so the call sites that wanted the year shape are still findable if
+// the display ordering is ever restored as a separate column.
 func generateYearID(prefix string) string {
-	b := make([]byte, 3)
-	_, _ = rand.Read(b)
-	tail := strings.ToUpper(hex.EncodeToString(b))
-	year := time.Now().UTC().Year()
-	return fmt.Sprintf("%s-%d-%s", prefix, year, tail)
+	return generateID(prefix)
 }
 
 // currentUser returns the username for audit purposes. Prefers the
