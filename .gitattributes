@@ -1,0 +1,14 @@
+# Migration files are hashed by the migration runner: it records a sha256 of the
+# file when it applies it and refuses to run if the file later differs, on the
+# principle that a forward-only migration must never be edited.
+#
+# Git's autocrlf turns that safety check into a false alarm. On a Windows
+# checkout every .sql arrives with CRLF, so the runner hashes different bytes
+# from the ones the ledger recorded on Linux and reports "0001_initial was
+# already applied but its contents have changed" — for a file nobody has
+# touched. That blocked eleven pending fleet migrations until it was diagnosed.
+#
+# The superproject declares `* text=auto`, but submodules do not inherit it.
+# Pinning eol=lf here makes the working copy byte-identical on every platform,
+# so the checksum means what it claims to.
+*.sql text eol=lf
