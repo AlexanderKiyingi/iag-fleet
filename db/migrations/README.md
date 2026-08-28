@@ -40,8 +40,9 @@ the schema is never left half-applied. What a failure does cost is the boot: if
 |---------|---------|-------|
 | `0040_vehicles_last_seen_default` | `vehicles.last_seen` had no default, so API vehicle creation was impossible | metadata only |
 | `0044_form_fields_with_no_home` | Columns for fields the fleet forms already collect and the service had nowhere to put | 16 additive columns, 2 indexes |
+| `0045_jmp_notes` | `jmps.notes` — missed by 0044; the journey-plan form has always had the field | 1 additive column |
 
-Both are additive and guarded with `IF NOT EXISTS`, so they apply to a populated
+All three are additive and guarded with `IF NOT EXISTS`, so they apply to a populated
 database without touching a row. `0044`'s DATE columns are deliberately nullable:
 the generic CRUD resource inserts every column and an empty string cast to date
 writes NULL, so a NOT NULL date with no value to supply would make creation
