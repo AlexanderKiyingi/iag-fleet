@@ -22,7 +22,12 @@ FROM base AS fleet-iot-clone
 # live-map payload; the column is written by SyncVehicleFromPing inside
 # fleet-iot, so the API served an empty string in production until the bump to
 # 61b50de. Ingest authz hardening (6e6292b) was likewise undeployed.
-ARG FLEET_IOT_REF=4f75a7a
+#
+# Bumped to c3a18db: migration 0043 made iot_devices.vehicle_id a uuid, and
+# fleet-iot read it as COALESCE(vehicle_id, ''), which Postgres refuses to
+# type-check. Every device read 500'd. The fix lives in fleet-iot, so leaving
+# this pin behind would have kept the outage with a green fleet build.
+ARG FLEET_IOT_REF=c3a18db
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
