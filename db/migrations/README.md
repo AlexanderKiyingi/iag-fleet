@@ -56,6 +56,7 @@ the schema is never left half-applied. What a failure does cost is the boot: if
 | `0040_vehicles_last_seen_default` | `vehicles.last_seen` had no default, so API vehicle creation was impossible | metadata only |
 | `0044_form_fields_with_no_home` | Columns for fields the fleet forms already collect and the service had nowhere to put | 16 additive columns, 2 indexes |
 | `0045_jmp_notes` | `jmps.notes` — missed by 0044; the journey-plan form has always had the field | 1 additive column |
+| `0046_vehicles_driver_id_uuid` | `vehicles.driver_id` — missed by 0043; 20 of 42 vehicles point at a driver that cannot be found | type change + FK + index |
 
 > **`0045` has no model field behind it yet, deliberately.** `JMP.Notes` was
 > deployed with the migration still pending and every `jmps` read 500'd with
@@ -64,11 +65,24 @@ the schema is never left half-applied. What a failure does cost is the boot: if
 > all along, and shipping both at once into an auto-deploying branch is how
 > it gets broken.
 
-All three are additive and guarded with `IF NOT EXISTS`, so they apply to a populated
+`0040`, `0044` and `0045` are additive and guarded with `IF NOT EXISTS`, so they apply to a populated
 database without touching a row. `0044`'s DATE columns are deliberately nullable:
 the generic CRUD resource inserts every column and an empty string cast to date
 writes NULL, so a NOT NULL date with no value to supply would make creation
 impossible — the same failure `0040` fixes for `vehicles.last_seen`.
+
+`0046` is not additive — it retypes a populated column — but it is exact rather
+than a guess: `fleet_id_to_uuid` was deterministic, and `drivers.id` was
+converted from the very strings `vehicles.driver_id` still holds. All 20 links
+were checked against production before it was written; every one maps onto a
+driver and the names line up. A value that is already a uuid passes through
+untouched, so it is safe on a database where some rows were written after 0043.
+
+Unlike `0045`, `0046`'s model change ships with it. `dbcast:"uuid"` on
+`Vehicle.DriverID` casts `driver_id::text` on read, which is valid whether the
+column is still TEXT or already UUID, so the binary is safe either side of the
+migration. `0045` was different: it added a column that does not exist until it
+runs, and there is no cast that makes a missing column readable.
 
 **Until `0044` is applied the columns do not exist.** The service omits them from
 its JSON, the app reads them empty, and the app's own contract suite

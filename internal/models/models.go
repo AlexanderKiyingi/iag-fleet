@@ -71,7 +71,7 @@ type Vehicle struct {
 	DriveHand          string   `json:"driveHand,omitempty"      db:"drive_hand"`
 	PurchaseDate       string   `json:"purchaseDate,omitempty"   db:"purchase_date" dbcast:"date"`
 	Mileage            *float64 `json:"mileage,omitempty"        db:"mileage"`
-	DriverID           string   `json:"driverId,omitempty"       db:"driver_id"`
+	DriverID           string   `json:"driverId,omitempty"       db:"driver_id" dbcast:"uuid"`
 	Status             string   `json:"status"                   db:"status"`
 	Location           string   `json:"location"                 db:"location"`
 	Lat                float64  `json:"lat"                      db:"lat"`
