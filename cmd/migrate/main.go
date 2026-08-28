@@ -35,10 +35,12 @@ import (
 
 	fleetdb "github.com/iag/fleet-tool/backend/db"
 	"github.com/iag/fleet-tool/backend/internal/migrate"
+	"github.com/iag/fleet-tool/backend/internal/store"
 )
 
 func main() {
 	dryRun := flag.Bool("dry-run", false, "list pending migrations and exit without applying anything")
+	verify := flag.Bool("verify", false, "report columns the models read that the database lacks, and exit")
 	timeout := flag.Duration("timeout", 10*time.Minute, "overall time limit for the run")
 	flag.Parse()
 
@@ -81,6 +83,28 @@ func main() {
 	applied, pending, err := migrate.Status(ctx, pool, fleetdb.Migrations())
 	if err != nil {
 		log.Fatalf("status: %v", err)
+	}
+
+	// -verify answers "is it safe to deploy this build against this database".
+	// It is the check that would have caught a model field shipped ahead of its
+	// migration, which otherwise surfaces only as every read of that table
+	// failing once the new binary is live.
+	if *verify {
+		repo := store.NewRepository(pool)
+		missing, vErr := store.VerifySchema(ctx, pool, repo.SchemaSpecs())
+		if vErr != nil {
+			log.Fatalf("verify: %v", vErr)
+		}
+		if len(missing) == 0 {
+			fmt.Printf("%s: schema matches the models - safe to deploy\n", redact(databaseURL))
+			return
+		}
+		fmt.Printf("%s: %d column(s) the models read are missing:\n", redact(databaseURL), len(missing))
+		for _, m := range missing {
+			fmt.Printf("  missing  %s\n", m)
+		}
+		fmt.Println("Apply the pending migrations before deploying this build.")
+		os.Exit(1)
 	}
 
 	fmt.Printf("%s: %d applied, %d pending\n", redact(databaseURL), len(applied), len(pending))

@@ -23,7 +23,15 @@ migrates; `cmd/migrate` does, out of band.
 ```bash
 DATABASE_URL=... go run ./cmd/migrate -dry-run   # report, change nothing
 DATABASE_URL=... go run ./cmd/migrate            # apply
+DATABASE_URL=... go run ./cmd/migrate -verify    # is this build safe to deploy?
 ```
+
+`-verify` compares every column the models read against the live schema and
+exits non-zero listing what is missing. It is the check for the other half of
+the ordering problem: `-dry-run` tells you the database is behind the
+migrations, `-verify` tells you the database is behind the **binary**, which is
+what takes a table down. Run it between migrating and deploying, and again if a
+deploy misbehaves.
 
 **Deploy order is: migrate, then start the API.** Running it when there is
 nothing to do is a no-op, and running it twice applies nothing — versions are

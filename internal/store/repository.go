@@ -349,4 +349,33 @@ func (r *Repository) FuelDB() FuelDB {
 
 // SilenceUnused keeps the time import live when audit-row iteration is
 // bypassed by a direct LIMIT clause.
-var _ = time.Now
+var _ = time.Now
+
+// SchemaSpecs is every generic Collection's table and columns, for VerifySchema.
+//
+// Listed explicitly rather than reflected: the compiler then fails when a
+// collection is added and not covered here, where reflection would silently
+// skip it and the check would quietly stop checking.
+func (r *Repository) SchemaSpecs() []ColumnSpec {
+	return []ColumnSpec{
+		r.Vehicles.Spec(),
+		r.Drivers.Spec(),
+		r.JMPs.Spec(),
+		r.Cargo.Spec(),
+		r.CargoDocs.Spec(),
+		r.Fuel.Spec(),
+		r.FuelRequests.Spec(),
+		r.Maintenance.Spec(),
+		r.Parts.Spec(),
+		r.Tyres.Spec(),
+		r.Trips.Spec(),
+		r.Safety.Spec(),
+		r.Compliance.Spec(),
+		r.Requests.Spec(),
+		r.Tasks.Spec(),
+		r.Deployment.Spec(),
+		r.InspectionTemplates.Spec(),
+		r.Inspections.Spec(),
+		r.PMSchedules.Spec(),
+	}
+}

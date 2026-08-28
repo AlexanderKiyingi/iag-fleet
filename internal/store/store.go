@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -851,4 +852,81 @@ func scanInto[T any](rows pgx.Rows, cols []columnInfo, item *T) error {
 		dests[i] = v.Field(ci.fieldIdx).Addr().Interface()
 	}
 	return rows.Scan(dests...)
+}
+
+// ColumnSpec is the table and column list one Collection reads and writes.
+//
+// Every statement a Collection issues names each of these columns, so a column
+// the database does not have breaks that whole table — not the one field.
+type ColumnSpec struct {
+	Table   string
+	Columns []string
+}
+
+// Spec reports what this collection expects of its table, so a deploy can check
+// the schema before it serves rather than discovering the gap per request.
+func (c *Collection[T, PT]) Spec() ColumnSpec {
+	cols := make([]string, len(c.columns))
+	for i, ci := range c.columns {
+		cols[i] = ci.name
+	}
+	return ColumnSpec{Table: c.table, Columns: cols}
+}
+
+// VerifySchema reports columns the models select that the database lacks,
+// as "table.column", sorted.
+//
+// The failure this exists to catch: ship a model field whose migration has not
+// been applied and every read of that table fails with `column "x" does not
+// exist`, as a 500 per request with nothing at boot to say why. That has now
+// happened twice — 7873109 ("vehicles was 502 in production") and again when a
+// JMP.Notes field was deployed ahead of migration 0045.
+//
+// One query for every table rather than one per table: this runs on a deploy
+// path, and the answer is the same either way.
+func VerifySchema(ctx context.Context, pool *pgxpool.Pool, specs []ColumnSpec) ([]string, error) {
+	tables := make([]string, 0, len(specs))
+	for _, sp := range specs {
+		tables = append(tables, sp.Table)
+	}
+	rows, err := pool.Query(ctx,
+		`SELECT table_name, column_name FROM information_schema.columns
+		 WHERE table_schema = current_schema() AND table_name = ANY($1)`, tables)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	have := map[string]map[string]bool{}
+	for rows.Next() {
+		var t, col string
+		if err := rows.Scan(&t, &col); err != nil {
+			return nil, err
+		}
+		if have[t] == nil {
+			have[t] = map[string]bool{}
+		}
+		have[t][col] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var missing []string
+	for _, sp := range specs {
+		cols := have[sp.Table]
+		if cols == nil {
+			// The table itself is absent — report it once rather than listing
+			// every column as missing.
+			missing = append(missing, sp.Table+" (table missing)")
+			continue
+		}
+		for _, col := range sp.Columns {
+			if !cols[col] {
+				missing = append(missing, sp.Table+"."+col)
+			}
+		}
+	}
+	sort.Strings(missing)
+	return missing, nil
 }
