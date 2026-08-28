@@ -33,6 +33,13 @@ migrations, `-verify` tells you the database is behind the **binary**, which is
 what takes a table down. Run it between migrating and deploying, and again if a
 deploy misbehaves.
 
+It covers the nineteen generic `Collection` tables — the relational side, in
+the `iag_fleet` schema. Tables are resolved with `to_regclass`, which follows
+the same `search_path` (`iag_fleet, public`) the queries use, so a table living
+in `public` is found rather than reported missing. The telemetry time-series
+tables are owned by Fleet_IoT, read through their own pool and hand-written
+SQL, and are **not** covered.
+
 **Deploy order is: migrate, then start the API.** Running it when there is
 nothing to do is a no-op, and running it twice applies nothing — versions are
 recorded with a checksum.

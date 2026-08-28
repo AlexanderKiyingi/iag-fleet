@@ -39,7 +39,13 @@ was not.
 1. **Deploy the ingest listeners** with public ingress:
    - HTTP (`/app/ingest`): a normal public HTTPS domain is enough.
    - TCP (`/app/gateway`, `/app/sinotrack`): these need a **TCP proxy**, not an
-     HTTP route. Each needs `DATABASE_URL` pointed at the telemetry database.
+     HTTP route. Each needs `DATABASE_URL` pointed at the telemetry schema.
+
+   The platform runs **one database** shared across services. Fleet uses two
+   schemas in it: `iag_fleet` for the relational tables (connections set
+   `search_path = "iag_fleet, public"`) and a separate schema for the
+   time-series data. `TELEMETRY_DATABASE_URL` exists so telemetry *can* be
+   split onto its own host later; it is not a second database today.
 2. **Set `TELEMETRY_INGEST_URL`** on `iag-fleet` to the public HTTPS base of the
    ingest service — no trailing `/v1/pings`, the guide appends it. Confirm with
    `GET /api/v1/fleet/api/iot/ingestion`: `"configured"` must be `true`.

@@ -889,9 +889,24 @@ func VerifySchema(ctx context.Context, pool *pgxpool.Pool, specs []ColumnSpec) (
 	for _, sp := range specs {
 		tables = append(tables, sp.Table)
 	}
+	// Resolved through to_regclass, not information_schema.table_schema.
+	//
+	// Fleet shares one database with the rest of the platform and runs with
+	// search_path = "iag_fleet, public", so an unqualified table name may
+	// resolve to either schema. Restricting the lookup to current_schema()
+	// would report a table that lives in public as missing — a false alarm on a
+	// deploy gate, which is the one thing it must not produce.
+	//
+	// to_regclass applies the same search_path the queries themselves use, and
+	// returns NULL rather than erroring for a name that resolves nowhere, so a
+	// genuinely absent table is reported instead of failing the whole check.
 	rows, err := pool.Query(ctx,
-		`SELECT table_name, column_name FROM information_schema.columns
-		 WHERE table_schema = current_schema() AND table_name = ANY($1)`, tables)
+		`SELECT t.name, a.attname
+		   FROM unnest($1::text[]) AS t(name)
+		   LEFT JOIN pg_attribute a
+		     ON a.attrelid = to_regclass(t.name)
+		    AND a.attnum > 0
+		    AND NOT a.attisdropped`, tables)
 	if err != nil {
 		return nil, err
 	}
@@ -899,14 +914,17 @@ func VerifySchema(ctx context.Context, pool *pgxpool.Pool, specs []ColumnSpec) (
 
 	have := map[string]map[string]bool{}
 	for rows.Next() {
-		var t, col string
+		var t string
+		var col *string // NULL when the table resolves nowhere
 		if err := rows.Scan(&t, &col); err != nil {
 			return nil, err
 		}
 		if have[t] == nil {
 			have[t] = map[string]bool{}
 		}
-		have[t][col] = true
+		if col != nil {
+			have[t][*col] = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -915,7 +933,7 @@ func VerifySchema(ctx context.Context, pool *pgxpool.Pool, specs []ColumnSpec) (
 	var missing []string
 	for _, sp := range specs {
 		cols := have[sp.Table]
-		if cols == nil {
+		if len(cols) == 0 {
 			// The table itself is absent — report it once rather than listing
 			// every column as missing.
 			missing = append(missing, sp.Table+" (table missing)")
