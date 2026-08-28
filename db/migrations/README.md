@@ -34,22 +34,33 @@ the schema is never left half-applied. What a failure does cost is the boot: if
 `AUTO_MIGRATE` is left at its default of `true`, the API calls `os.Exit(1)` with
 "auto-migrate failed; refusing to serve". Dry-run first.
 
-### Pending as of 2026-08-23
+### Pending as of 2026-08-28
 
 | Version | Purpose | Shape |
 |---------|---------|-------|
 | `0040_vehicles_last_seen_default` | `vehicles.last_seen` had no default, so API vehicle creation was impossible | metadata only |
-| `0041_vehicle_lifecycle_state` | Asset lifecycle (FR-VEH-06) + disposal detail (FR-VEH-10) | 8 additive columns, CHECK, index |
-| `0042_driver_authorisation_matrix` | Driver-vehicle authorisation matrix (FR-DRV-04) | 3 new tables + `vehicles.category_id` |
+| `0044_form_fields_with_no_home` | Columns for fields the fleet forms already collect and the service had nowhere to put | 16 additive columns, 2 indexes |
 
-All three are additive and guarded with `IF NOT EXISTS`. `0041`'s CHECK
-constraint passes trivially because the column it validates is created in the
-same statement with `DEFAULT 'Active'`, so every existing row satisfies it.
-`0042` seeds no rows on purpose — the authorisation check fails open on an empty
-matrix, and a seeded taxonomy would start refusing assignments on the day it
-deployed.
+Both are additive and guarded with `IF NOT EXISTS`, so they apply to a populated
+database without touching a row. `0044`'s DATE columns are deliberately nullable:
+the generic CRUD resource inserts every column and an empty string cast to date
+writes NULL, so a NOT NULL date with no value to supply would make creation
+impossible — the same failure `0040` fixes for `vehicles.last_seen`.
 
-Until these are applied, `lifecycle_state`, `category_id` and the three matrix
-tables do not exist: the lifecycle transition endpoint and the
+**Until `0044` is applied the columns do not exist.** The service omits them from
+its JSON, the app reads them empty, and the app's own contract suite
+(`npm run iag:contract` in the iag-fleet frontend) fails vehicle, driver and trip
+with `[needs fleet migration 0044]`. That red IS the check: it goes green when
+the migration has run, and it is how to confirm the deploy took.
+
+Deploying the API before the migration is what broke production once already —
+`7873109` reverted the vehicle-lifecycle and driver-authorisation work
+("vehicles was 502 in production") because the model gained columns the database
+did not have. **Migrate first, then start the API.** That revert is also why
 `/api/vehicle-categories`, `/api/permit-classes` and `/api/permit-authorisations`
-collections will error against the running service.
+still 404: the handlers, router entries and migrations were removed together and
+the frontend adapters for them were not. The code is recoverable from `7873109^`
+when the deploy order can be guaranteed.
+
+Numbers `0041`–`0043` were taken by other in-flight work after the revert freed
+them, which is why this file jumps to `0044`.
