@@ -14,7 +14,7 @@
 package models
 
 type Driver struct {
-	ID                string  `json:"id"                          db:"id"`
+	ID                string  `json:"id"                          db:"id" dbcast:"uuid"`
 	Name              string  `json:"name"                        db:"name"`
 	Initials          string  `json:"initials"                    db:"initials"`
 	External          bool    `json:"external"                    db:"external"`
@@ -31,7 +31,7 @@ type Driver struct {
 	DefensiveExpiry   string  `json:"defensiveExpiry,omitempty"   db:"defensive_expiry"  dbcast:"date"`
 	MedicalExpiry     string  `json:"medicalExpiry,omitempty"     db:"medical_expiry"    dbcast:"date"`
 	YearsExp          int     `json:"yearsExp"                    db:"years_exp"`
-	VehicleID         string  `json:"vehicleId,omitempty"         db:"vehicle_id"`
+	VehicleID         string  `json:"vehicleId,omitempty"         db:"vehicle_id" dbcast:"uuid"`
 	CurrentAssignment string  `json:"currentAssignment,omitempty" db:"current_assignment"`
 	PlatformUserID    string  `json:"platformUserId,omitempty"    db:"platform_user_id" dbcast:"uuid"`
 	HomeRegion        string  `json:"homeRegion"                  db:"home_region"`
@@ -55,7 +55,7 @@ func (d Driver) GetID() string    { return d.ID }
 func (d *Driver) SetID(id string) { d.ID = id }
 
 type Vehicle struct {
-	ID                 string   `json:"id"                       db:"id"`
+	ID                 string   `json:"id"                       db:"id" dbcast:"uuid"`
 	Plate              string   `json:"plate"                    db:"plate"`
 	Type               string   `json:"type"                     db:"type"`
 	Make               string   `json:"make"                     db:"make"`
@@ -140,9 +140,9 @@ type Toolbox struct {
 }
 
 type JMP struct {
-	ID                string   `json:"id"                       db:"id"`
-	VehicleID         string   `json:"vehicleId"                db:"vehicle_id"`
-	DriverID          string   `json:"driverId"                 db:"driver_id"`
+	ID                string   `json:"id"                       db:"id" dbcast:"uuid"`
+	VehicleID         string   `json:"vehicleId"                db:"vehicle_id" dbcast:"uuid"`
+	DriverID          string   `json:"driverId"                 db:"driver_id" dbcast:"uuid"`
 	Purpose           string   `json:"purpose"                  db:"purpose"`
 	CargoDescription  string   `json:"cargoDescription"         db:"cargo_description"`
 	StartDate         string   `json:"startDate"                db:"start_date"        dbcast:"date"`
@@ -168,7 +168,7 @@ type JMP struct {
 	ApprovedAt        string   `json:"approvedAt,omitempty"     db:"approved_at"       dbcast:"timestamptz"`
 	CompletedAt       string   `json:"completedAt,omitempty"    db:"completed_at"      dbcast:"timestamptz"`
 	ParkingPhotos     []string `json:"parkingPhotos"            db:"parking_photos" dbdefault:"true"`
-	SourceRequestID   string   `json:"sourceRequestId,omitempty" db:"source_request_id"`
+	SourceRequestID   string   `json:"sourceRequestId,omitempty" db:"source_request_id" dbcast:"uuid"`
 	// DispatchStatus is the pre-trip dispatch approval gate (Pending/Approved/
 	// Rejected), distinct from MileageStatus (the post-trip mileage approval).
 	// Stamped "Pending" at creation; cleared (empty) on historical rows.
@@ -200,7 +200,7 @@ type CargoStageEvent struct {
 type CargoStageHistory []CargoStageEvent
 
 type Cargo struct {
-	ID               string            `json:"id"                          db:"id"`
+	ID               string            `json:"id"                          db:"id" dbcast:"uuid"`
 	Convoy           string            `json:"convoy"                      db:"convoy"`
 	TruckPlate       string            `json:"truckPlate"                  db:"truck_plate"`
 	DriverName       string            `json:"driverName"                  db:"driver_name"`
@@ -226,8 +226,8 @@ func (c Cargo) GetID() string    { return c.ID }
 func (c *Cargo) SetID(id string) { c.ID = id }
 
 type CargoDoc struct {
-	ID      string `json:"id"                db:"id"`
-	CargoID string `json:"cargoId"           db:"cargo_id"`
+	ID      string `json:"id"                db:"id" dbcast:"uuid"`
+	CargoID string `json:"cargoId"           db:"cargo_id" dbcast:"uuid"`
 	DocType string `json:"docType"           db:"doc_type"`
 	DocNo   string `json:"docNo,omitempty"   db:"doc_no"`
 	Issued  string `json:"issued,omitempty"  db:"issued"  dbcast:"date"`
@@ -249,9 +249,9 @@ type AnomalyHistoryEvent struct {
 type AnomalyHistory []AnomalyHistoryEvent
 
 type FuelRecord struct {
-	ID             string         `json:"id"                       db:"id"`
-	VehicleID      string         `json:"vehicleId"                db:"vehicle_id"`
-	DriverID       string         `json:"driverId,omitempty"       db:"driver_id"`
+	ID             string         `json:"id"                       db:"id" dbcast:"uuid"`
+	VehicleID      string         `json:"vehicleId"                db:"vehicle_id" dbcast:"uuid"`
+	DriverID       string         `json:"driverId,omitempty"       db:"driver_id" dbcast:"uuid"`
 	Date           string         `json:"date"                     db:"date"   dbcast:"date"`
 	Litres         float64        `json:"litres"                   db:"litres"`
 	UnitPrice      float64        `json:"unitPrice"                db:"unit_price"`
@@ -298,8 +298,8 @@ type StatusHistoryEvent struct {
 type StatusHistory []StatusHistoryEvent
 
 type MaintenanceItem struct {
-	ID             string               `json:"id"                  db:"id"`
-	VehicleID      string               `json:"vehicleId"           db:"vehicle_id"`
+	ID             string               `json:"id"                  db:"id" dbcast:"uuid"`
+	VehicleID      string               `json:"vehicleId"           db:"vehicle_id" dbcast:"uuid"`
 	Date           string               `json:"date"                db:"date"     dbcast:"date"`
 	Type           string               `json:"type"                db:"type"`
 	Service        string               `json:"service"             db:"service"`
@@ -314,8 +314,8 @@ type MaintenanceItem struct {
 	Notes          string               `json:"notes,omitempty"     db:"notes"`
 	PartsBreakdown MaintenancePartLines `json:"partsBreakdown"      db:"parts_breakdown"`
 	StatusHistory  StatusHistory        `json:"statusHistory"       db:"status_history"`
-	PmScheduleID   string               `json:"pmScheduleId,omitempty" db:"pm_schedule_id"`
-	LinkedSafetyID string               `json:"linkedSafetyId,omitempty" db:"linked_safety_id"`
+	PmScheduleID   string               `json:"pmScheduleId,omitempty" db:"pm_schedule_id" dbcast:"uuid"`
+	LinkedSafetyID string               `json:"linkedSafetyId,omitempty" db:"linked_safety_id" dbcast:"uuid"`
 
 	// What the approval was given against. Distinct from Cost, which is what
 	// the work came to; collapsing them loses the variance. (0044)
@@ -341,7 +341,7 @@ type PartMovement struct {
 type PartMovements []PartMovement
 
 type Part struct {
-	ID           string        `json:"id"               db:"id"`
+	ID           string        `json:"id"               db:"id" dbcast:"uuid"`
 	Name         string        `json:"name"             db:"name"`
 	Category     string        `json:"category"         db:"category"`
 	SKU          string        `json:"sku"              db:"sku"`
@@ -368,8 +368,8 @@ func (p Part) GetID() string    { return p.ID }
 func (p *Part) SetID(id string) { p.ID = id }
 
 type Tyre struct {
-	ID             string  `json:"id"               db:"id"`
-	VehicleID      string  `json:"vehicleId"        db:"vehicle_id"`
+	ID             string  `json:"id"               db:"id" dbcast:"uuid"`
+	VehicleID      string  `json:"vehicleId"        db:"vehicle_id" dbcast:"uuid"`
 	Position       string  `json:"position"         db:"position"`
 	Brand          string  `json:"brand"            db:"brand"`
 	Model          string  `json:"model"            db:"model"`
@@ -385,9 +385,9 @@ func (t Tyre) GetID() string    { return t.ID }
 func (t *Tyre) SetID(id string) { t.ID = id }
 
 type Trip struct {
-	ID            string   `json:"id"                  db:"id"`
-	DriverID      string   `json:"driverId"            db:"driver_id"`
-	VehicleID     string   `json:"vehicleId"           db:"vehicle_id"`
+	ID            string   `json:"id"                  db:"id" dbcast:"uuid"`
+	DriverID      string   `json:"driverId"            db:"driver_id" dbcast:"uuid"`
+	VehicleID     string   `json:"vehicleId"           db:"vehicle_id" dbcast:"uuid"`
 	Date          string   `json:"date"                db:"date"   dbcast:"date"`
 	StartLocation string   `json:"startLocation"       db:"start_location"`
 	EndLocation   string   `json:"endLocation"         db:"end_location"`
@@ -415,9 +415,9 @@ func (t Trip) GetID() string    { return t.ID }
 func (t *Trip) SetID(id string) { t.ID = id }
 
 type SafetyEvent struct {
-	ID            string        `json:"id"                  db:"id"`
-	VehicleID     string        `json:"vehicleId"           db:"vehicle_id"`
-	DriverID      string        `json:"driverId,omitempty"  db:"driver_id"`
+	ID            string        `json:"id"                  db:"id" dbcast:"uuid"`
+	VehicleID     string        `json:"vehicleId"           db:"vehicle_id" dbcast:"uuid"`
+	DriverID      string        `json:"driverId,omitempty"  db:"driver_id" dbcast:"uuid"`
 	Date          string        `json:"date"                db:"date"  dbcast:"timestamptz"`
 	Type          string        `json:"type"                db:"type"`
 	Severity      string        `json:"severity"            db:"severity"`
@@ -430,7 +430,7 @@ type SafetyEvent struct {
 	GpsLng        *float64      `json:"gpsLng,omitempty"    db:"gps_lng"`
 	Injuries      *int          `json:"injuries,omitempty"  db:"injuries"`
 	Cost          *float64      `json:"cost,omitempty"      db:"cost"`
-	LinkedWoID    string        `json:"linkedWoId,omitempty" db:"linked_wo_id"`
+	LinkedWoID    string        `json:"linkedWoId,omitempty" db:"linked_wo_id" dbcast:"uuid"`
 	Authorities   string        `json:"authorities,omitempty" db:"authorities"`
 	StatusHistory StatusHistory `json:"statusHistory"       db:"status_history"`
 }
@@ -455,9 +455,9 @@ type ComplianceRenewal struct {
 type ComplianceRenewals []ComplianceRenewal
 
 type ComplianceItem struct {
-	ID             string             `json:"id"                   db:"id"`
-	VehicleID      string             `json:"vehicleId,omitempty"  db:"vehicle_id"`
-	DriverID       string             `json:"driverId,omitempty"   db:"driver_id"`
+	ID             string             `json:"id"                   db:"id" dbcast:"uuid"`
+	VehicleID      string             `json:"vehicleId,omitempty"  db:"vehicle_id" dbcast:"uuid"`
+	DriverID       string             `json:"driverId,omitempty"   db:"driver_id" dbcast:"uuid"`
 	DocType        string             `json:"docType"              db:"doc_type"`
 	DocNumber      string             `json:"docNumber,omitempty"  db:"doc_number"`
 	Issuer         string             `json:"issuer,omitempty"     db:"issuer"`
@@ -473,7 +473,7 @@ func (c ComplianceItem) GetID() string    { return c.ID }
 func (c *ComplianceItem) SetID(id string) { c.ID = id }
 
 type ServiceRequest struct {
-	ID                   string `json:"id"                          db:"id"`
+	ID                   string `json:"id"                          db:"id" dbcast:"uuid"`
 	RequesterName        string `json:"requesterName"               db:"requester_name"`
 	RequesterDept        string `json:"requesterDept"               db:"requester_dept"`
 	RequesterPhone       string `json:"requesterPhone,omitempty"    db:"requester_phone"`
@@ -489,10 +489,10 @@ type ServiceRequest struct {
 	Status               string `json:"status"                      db:"status"`
 	SubmittedAt          string `json:"submittedAt"                 db:"submitted_at" dbcast:"timestamptz" dbdefault:"true"`
 	CreatedBy            string `json:"createdBy,omitempty"         db:"created_by"`
-	AssignedVehicleID    string `json:"assignedVehicleId,omitempty" db:"assigned_vehicle_id"`
-	AssignedDriverID     string `json:"assignedDriverId,omitempty"  db:"assigned_driver_id"`
-	JmpID                string `json:"jmpId,omitempty"             db:"jmp_id"`
-	TaskID               string `json:"taskId,omitempty"            db:"task_id"`
+	AssignedVehicleID    string `json:"assignedVehicleId,omitempty" db:"assigned_vehicle_id" dbcast:"uuid"`
+	AssignedDriverID     string `json:"assignedDriverId,omitempty"  db:"assigned_driver_id" dbcast:"uuid"`
+	JmpID                string `json:"jmpId,omitempty"             db:"jmp_id" dbcast:"uuid"`
+	TaskID               string `json:"taskId,omitempty"            db:"task_id" dbcast:"uuid"`
 	// ApprovedBy / ApprovedAt record who moved the request into "approved"
 	// and when — the approval audit trail. Stamped the first time the status
 	// reaches "approved", via either the /advance workflow endpoint or the
@@ -507,7 +507,7 @@ type ServiceRequest struct {
 	AssignmentApprovedAt string `json:"assignmentApprovedAt,omitempty" db:"assignment_approved_at" dbcast:"timestamptz"`
 	DeployedBy           string `json:"deployedBy,omitempty"           db:"deployed_by"`
 	DeployedAt           string `json:"deployedAt,omitempty"           db:"deployed_at" dbcast:"timestamptz"`
-	DeploymentEntryID    string `json:"deploymentEntryId,omitempty"    db:"deployment_entry_id"`
+	DeploymentEntryID    string `json:"deploymentEntryId,omitempty"    db:"deployment_entry_id" dbcast:"uuid"`
 }
 
 func (s ServiceRequest) GetID() string    { return s.ID }
@@ -519,9 +519,9 @@ func (s *ServiceRequest) SetID(id string) { s.ID = id }
 // On fulfilment the request spawns a FuelRecord (FuelRecordID links the two)
 // and the existing fleet.fuel.recorded finance event fires from that record.
 type FuelRequest struct {
-	ID              string  `json:"id"                       db:"id"`
-	VehicleID       string  `json:"vehicleId"                db:"vehicle_id"`
-	DriverID        string  `json:"driverId,omitempty"       db:"driver_id"`
+	ID              string  `json:"id"                       db:"id" dbcast:"uuid"`
+	VehicleID       string  `json:"vehicleId"                db:"vehicle_id" dbcast:"uuid"`
+	DriverID        string  `json:"driverId,omitempty"       db:"driver_id" dbcast:"uuid"`
 	RequesterName   string  `json:"requesterName"            db:"requester_name"`
 	RequesterDept   string  `json:"requesterDept,omitempty"  db:"requester_dept"`
 	RequestedLitres float64 `json:"requestedLitres"          db:"requested_litres"`
@@ -536,12 +536,12 @@ type FuelRequest struct {
 	SubmittedAt     string  `json:"submittedAt,omitempty"    db:"submitted_at" dbcast:"timestamptz"`
 	ApprovedBy      string  `json:"approvedBy,omitempty"     db:"approved_by"`
 	ApprovedAt      string  `json:"approvedAt,omitempty"     db:"approved_at"  dbcast:"timestamptz"`
-	FuelRecordID    string  `json:"fuelRecordId,omitempty"   db:"fuel_record_id"`
+	FuelRecordID    string  `json:"fuelRecordId,omitempty"   db:"fuel_record_id" dbcast:"uuid"`
 	CreatedBy       string  `json:"createdBy,omitempty"      db:"created_by"`
 	// Chain linkage — a fuel request raised for a specific service request
 	// and/or journey plan (empty when raised standalone against a vehicle).
-	RequestID string `json:"requestId,omitempty" db:"request_id"`
-	JmpID     string `json:"jmpId,omitempty"     db:"jmp_id"`
+	RequestID string `json:"requestId,omitempty" db:"request_id" dbcast:"uuid"`
+	JmpID     string `json:"jmpId,omitempty"     db:"jmp_id" dbcast:"uuid"`
 
 	// Procurement reconciliation (transient, db:"-"): when the procurement
 	// integration is enabled, GET /fuel-requests/:id enriches these from the
@@ -565,7 +565,7 @@ type TaskLink struct {
 type TaskLinks []TaskLink
 
 type TaskItem struct {
-	ID           string    `json:"id"                  db:"id"`
+	ID           string    `json:"id"                  db:"id" dbcast:"uuid"`
 	Title        string    `json:"title"               db:"title"`
 	State        string    `json:"state"               db:"state"`
 	Priority     string    `json:"priority"            db:"priority"`
@@ -599,7 +599,7 @@ type DeploymentEntry struct {
 type DeploymentEntries []DeploymentEntry
 
 type DeploymentDay struct {
-	ID         string            `json:"id"          db:"id"`
+	ID         string            `json:"id"          db:"id" dbcast:"uuid"`
 	Date       string            `json:"date"        db:"date"        dbcast:"date"`
 	CompiledBy string            `json:"compiledBy"  db:"compiled_by"`
 	Notes      string            `json:"notes"       db:"notes"`
@@ -637,7 +637,7 @@ type InspectionChecklistItem struct {
 type InspectionChecklist []InspectionChecklistItem
 
 type InspectionTemplate struct {
-	ID        string              `json:"id"              db:"id"`
+	ID        string              `json:"id"              db:"id" dbcast:"uuid"`
 	Name      string              `json:"name"            db:"name"`
 	Kind      string              `json:"kind"            db:"kind"`
 	Checklist InspectionChecklist `json:"checklist"       db:"checklist"`
@@ -670,10 +670,10 @@ type InspectionDefect struct {
 type InspectionDefects []InspectionDefect
 
 type VehicleInspection struct {
-	ID            string            `json:"id"                      db:"id"`
-	TemplateID    string            `json:"templateId"              db:"template_id"`
-	VehicleID     string            `json:"vehicleId"               db:"vehicle_id"`
-	DriverID      string            `json:"driverId,omitempty"      db:"driver_id"`
+	ID            string            `json:"id"                      db:"id" dbcast:"uuid"`
+	TemplateID    string            `json:"templateId"              db:"template_id" dbcast:"uuid"`
+	VehicleID     string            `json:"vehicleId"               db:"vehicle_id" dbcast:"uuid"`
+	DriverID      string            `json:"driverId,omitempty"      db:"driver_id" dbcast:"uuid"`
 	Kind          string            `json:"kind"                    db:"kind"`
 	Status        string            `json:"status"                  db:"status"`
 	Odo           float64           `json:"odo"                     db:"odo"`
@@ -683,7 +683,7 @@ type VehicleInspection struct {
 	Signature     string            `json:"signature,omitempty"     db:"signature"`
 	SubmittedAt   string            `json:"submittedAt,omitempty"   db:"submitted_at" dbcast:"timestamptz"`
 	SubmittedBy   string            `json:"submittedBy,omitempty"   db:"submitted_by"`
-	MaintenanceID string            `json:"maintenanceId,omitempty" db:"maintenance_id"`
+	MaintenanceID string            `json:"maintenanceId,omitempty" db:"maintenance_id" dbcast:"uuid"`
 	Notes         string            `json:"notes,omitempty"         db:"notes"`
 }
 
@@ -693,8 +693,8 @@ func (v *VehicleInspection) SetID(id string) { v.ID = id }
 // ─── Preventive maintenance schedules ─────────────────────────────────────
 
 type PMSchedule struct {
-	ID                 string   `json:"id"                           db:"id"`
-	VehicleID          string   `json:"vehicleId,omitempty"          db:"vehicle_id"`
+	ID                 string   `json:"id"                           db:"id" dbcast:"uuid"`
+	VehicleID          string   `json:"vehicleId,omitempty"          db:"vehicle_id" dbcast:"uuid"`
 	Name               string   `json:"name"                         db:"name"`
 	ServiceType        string   `json:"serviceType"                  db:"service_type"`
 	ServiceDescription string   `json:"serviceDescription"           db:"service_description"`
