@@ -169,6 +169,13 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	(&handlers.Resource[models.Trip, *models.Trip]{
 		Repo: repo, Collection: repo.Trips, Entity: "trip", IDPrefix: "TRP",
+		// trips.vehicle_id and trips.driver_id are both NOT NULL. They used to
+		// accept "" because the columns were TEXT; 0043 made them uuid, so an
+		// unset reference is now NULL and Postgres refuses the insert. Without
+		// this the caller gets a raw null-violation as a 502 instead of being
+		// told which field they left out.
+		BeforeCreate: handlers.RequireTripRefs,
+		BeforeUpdate: handlers.RequireTripRefsOnUpdate,
 	}).Register(api, "/trips")
 
 	(&handlers.Resource[models.SafetyEvent, *models.SafetyEvent]{

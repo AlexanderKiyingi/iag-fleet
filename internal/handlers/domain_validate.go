@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
 )
@@ -25,6 +26,7 @@ var (
 	errDriverEligibility      = errors.New("driver not eligible for dispatch")
 	errVehicleNotDispatchable = errors.New("vehicle not dispatchable")
 	errInvalidFuelRecord      = errors.New("invalid fuel record")
+	errTripRefsRequired       = errors.New("trip reference required")
 	errToolboxIncomplete      = errors.New("complete the toolbox talk before activating the journey")
 	errVehicleNotFound        = errors.New("vehicle not found")
 	errVehicleInUse           = errors.New("vehicle is referenced by a live journey")
@@ -527,4 +529,30 @@ func validateFutureExpiry(expiry string) error {
 		return errInvalidComplianceExpiry
 	}
 	return nil
+}
+
+// RequireTripRefs rejects a trip with no vehicle or no driver.
+//
+// Both columns are NOT NULL and have been since 0001. They accepted "" for as
+// long as they were TEXT, so the API quietly stored a trip belonging to nobody.
+// 0043 retyped them to uuid, where "" is not a value — the store now sends NULL
+// and Postgres raises a null-violation the caller sees as a 502 naming a column
+// rather than a field.
+//
+// Validating here says which field is missing, and keeps the stricter rule the
+// uuid columns already enforce rather than working around it.
+func RequireTripRefs(_ *gin.Context, t *models.Trip) error {
+	if strings.TrimSpace(t.VehicleID) == "" {
+		return fmt.Errorf("%w: vehicleId — a trip has to belong to a vehicle", errTripRefsRequired)
+	}
+	if strings.TrimSpace(t.DriverID) == "" {
+		return fmt.Errorf("%w: driverId — a trip has to have a driver", errTripRefsRequired)
+	}
+	return nil
+}
+
+// RequireTripRefsOnUpdate applies the same rule to a PATCH, which merges onto
+// the stored row: clearing either reference is the same null-violation.
+func RequireTripRefsOnUpdate(c *gin.Context, t *models.Trip) error {
+	return RequireTripRefs(c, t)
 }

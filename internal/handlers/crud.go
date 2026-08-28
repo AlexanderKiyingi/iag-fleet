@@ -735,7 +735,8 @@ func respondMutationError(c *gin.Context, err error) {
 		errors.Is(err, errDriverNotFound) || errors.Is(err, errDriverPermitInvalid) ||
 		errors.Is(err, store.ErrNotFound) ||
 		errors.Is(err, errInvalidPMSchedule) || errors.Is(err, errInvalidMaintenanceStatus) ||
-		errors.Is(err, errInvalidComplianceDoc) || errors.Is(err, errInvalidComplianceExpiry) {
+		errors.Is(err, errInvalidComplianceDoc) || errors.Is(err, errInvalidComplianceExpiry) ||
+		errors.Is(err, errTripRefsRequired) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
