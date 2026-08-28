@@ -241,16 +241,31 @@ func (h *IoT) rotateKey(c *gin.Context) {
 
 // ingestionGuide documents how HTTP relays authenticate and POST pings (operator-only).
 func (h *IoT) ingestionGuide(c *gin.Context) {
+	// TELEMETRY_INGEST_URL is the address a device in the field posts to. It
+	// used to fall back to the compose-internal name, so an unconfigured
+	// deployment handed the operator http://fleet-iot-ingest:4080 — a hostname
+	// that resolves nowhere outside the private network and cannot be reached
+	// by a tracker on a GPRS SIM. Following it produces no error anyone sees:
+	// the device simply never connects, and the fleet reads as having no
+	// telemetry rather than as having nowhere to send it.
+	//
+	// Unset now says so, and the guide reports which listeners still need a
+	// public address instead of inventing one.
 	ingestBase := strings.TrimRight(os.Getenv("TELEMETRY_INGEST_URL"), "/")
-	if ingestBase == "" {
-		ingestBase = "http://fleet-iot-ingest:4080"
+	configured := ingestBase != ""
+	httpBlock := gin.H{
+		"configured": configured,
+	}
+	if !configured {
+		httpBlock["error"] = "TELEMETRY_INGEST_URL is not set on this deployment — " +
+			"no HTTP ingest address to give out. Devices cannot report until the " +
+			"Fleet_IoT ingest listener has a publicly reachable address and this " +
+			"variable points at it."
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"service": "Fleet_IoT",
-		"http": gin.H{
+		"http": mergeIngestHTTP(httpBlock, configured, ingestBase, gin.H{
 			"method":      "POST",
-			"url":         ingestBase + "/v1/pings",
-			"legacyPath":  ingestBase + "/api/iot/pings",
 			"contentType": "application/json",
 			"authorization": gin.H{
 				"scheme": "Bearer",
@@ -268,15 +283,38 @@ func (h *IoT) ingestionGuide(c *gin.Context) {
 				"speedKmh": 0, "fuelLevel": 62,
 				"raw": map[string]any{"note": "optional opaque JSON from device"},
 			}},
-		},
+		}),
+		// The TCP listeners have no equivalent variable to report: a tracker is
+		// programmed with a host and port over SMS, so the address lives on the
+		// device, not here. Reachability still has to be arranged — see
+		// docs/ST-901-onboarding.md in Fleet_IoT.
 		"tcp": gin.H{
-			"binary":     "Teltonika Codec 8 / 8E",
-			"listener":   "Fleet_IoT TCP gateway (default :5027)",
+			"teltonika":  "Codec 8 / 8E — Fleet_IoT gateway, default :5027",
+			"sinotrack":  "SinoTrack / HQ protocol — Fleet_IoT sinotrack, default :5013",
 			"identifier": "IMEI must match iot_devices.serial; no bearer token on wire.",
+			"note":       "Both need a publicly reachable host:port before a device can dial in.",
 		},
 	})
 }
 
+
+// mergeIngestHTTP folds the ingest address into the guide's HTTP block, or
+// leaves the address out entirely when none is configured. Reporting a URL that
+// cannot be reached is worse than reporting none: it looks actionable.
+func mergeIngestHTTP(head gin.H, configured bool, base string, body gin.H) gin.H {
+	out := gin.H{}
+	for k, v := range head {
+		out[k] = v
+	}
+	for k, v := range body {
+		out[k] = v
+	}
+	if configured {
+		out["url"] = base + "/v1/pings"
+		out["legacyPath"] = base + "/api/iot/pings"
+	}
+	return out
+}
 // testPing inserts one synthetic ping for onboarding verification (uses device → vehicle binding).
 func (h *IoT) testPing(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
