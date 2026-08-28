@@ -180,9 +180,6 @@ type JMP struct {
 	DispatchRejectReason string `json:"dispatchRejectReason,omitempty" db:"dispatch_reject_reason"`
 	MileageRejectReason  string `json:"mileageRejectReason,omitempty"  db:"mileage_reject_reason"`
 
-	// Carried by the journey-plan form since it was written; there was no
-	// column for it until 0045, so every note was discarded in the browser.
-	Notes string `json:"notes,omitempty" db:"notes"`
 }
 
 func (j JMP) GetID() string    { return j.ID }

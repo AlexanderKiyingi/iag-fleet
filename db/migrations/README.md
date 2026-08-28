@@ -42,6 +42,13 @@ the schema is never left half-applied. What a failure does cost is the boot: if
 | `0044_form_fields_with_no_home` | Columns for fields the fleet forms already collect and the service had nowhere to put | 16 additive columns, 2 indexes |
 | `0045_jmp_notes` | `jmps.notes` — missed by 0044; the journey-plan form has always had the field | 1 additive column |
 
+> **`0045` has no model field behind it yet, deliberately.** `JMP.Notes` was
+> deployed with the migration still pending and every `jmps` read 500'd with
+> `column "notes" does not exist` until it was backed out. Apply `0045` first,
+> then add the field back — that is the order this file has been asking for
+> all along, and shipping both at once into an auto-deploying branch is how
+> it gets broken.
+
 All three are additive and guarded with `IF NOT EXISTS`, so they apply to a populated
 database without touching a row. `0044`'s DATE columns are deliberately nullable:
 the generic CRUD resource inserts every column and an empty string cast to date
