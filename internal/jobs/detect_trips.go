@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/models"
 	"github.com/iag/fleet-tool/backend/internal/store"
@@ -49,7 +51,7 @@ func DetectTripsFromTelemetry(ctx context.Context, iotStore *iot.Store, repo *st
 				driverID = "UNKNOWN"
 			}
 			trip := models.Trip{
-				ID:            newTripID(pair.VehicleID, d.StartedAt),
+				ID:            uuid.NewString(),
 				DriverID:      driverID,
 				VehicleID:     pair.VehicleID,
 				Date:          d.StartedAt.UTC().Format("2006-01-02"),
@@ -90,6 +92,3 @@ func tripExistsJob(existing []models.Trip, vehicleID string, started time.Time) 
 	return false
 }
 
-func newTripID(vehicleID string, started time.Time) string {
-	return fmt.Sprintf("TRP-TEL-%s-%d", vehicleID, started.Unix())
-}
