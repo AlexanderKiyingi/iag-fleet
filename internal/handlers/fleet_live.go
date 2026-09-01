@@ -30,13 +30,21 @@ func (h *FleetLive) Register(rg *gin.RouterGroup) {
 }
 
 type fleetVehicleSnap struct {
-	ID            string  `json:"id"`
-	Plate         string  `json:"plate"`
-	Lat           float64 `json:"lat"`
-	Lng           float64 `json:"lng"`
-	Status        string  `json:"status"`
-	Heading       float64 `json:"heading"`
-	Location      string  `json:"location"`
+	ID       string  `json:"id"`
+	Plate    string  `json:"plate"`
+	Lat      float64 `json:"lat"`
+	Lng      float64 `json:"lng"`
+	Status   string  `json:"status"`
+	Heading  float64 `json:"heading"`
+	Location string  `json:"location"`
+	// Speed and LastSeen are what a map draws next to the marker: "42 km/h,
+	// 3 min ago". They were absent from this payload, so a client driven by
+	// this stream could move a dot but had to fall back to polling
+	// /api/vehicles for the two fields that say whether the dot is current.
+	// A marker that moves while its timestamp is stale reads as a bug, so the
+	// stream now carries everything the marker needs.
+	Speed         float64 `json:"speed"`
+	LastSeen      string  `json:"lastSeen,omitempty"`
 	LastFixSource string  `json:"lastFixSource,omitempty"`
 }
 
@@ -122,6 +130,6 @@ func vehicleSnap(v models.Vehicle) fleetVehicleSnap {
 	return fleetVehicleSnap{
 		ID: v.ID, Plate: v.Plate, Lat: v.Lat, Lng: v.Lng,
 		Status: v.Status, Heading: v.Heading, Location: v.Location,
-		LastFixSource: v.LastFixSource,
+		Speed: v.Speed, LastSeen: v.LastSeen, LastFixSource: v.LastFixSource,
 	}
 }

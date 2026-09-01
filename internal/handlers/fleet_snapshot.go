@@ -130,8 +130,12 @@ func (s *FleetSnapshotter) refresh(ctx context.Context) {
 	s.loadErr = nil
 	s.loadFail = 0
 	changed := !sameSnaps(s.snaps, next)
-	s.snaps = next
+	// Store only when publishing. Keeping the unpublished rows would make the
+	// next comparison run against them instead of against what subscribers
+	// actually hold, and last_seen would then never accumulate past its
+	// granularity window. See lastSeenPublishGranularity.
 	if changed {
+		s.snaps = next
 		s.rebuildLocked()
 	}
 	s.mu.Unlock()
@@ -141,11 +145,20 @@ func (s *FleetSnapshotter) refresh(ctx context.Context) {
 	}
 }
 
+// snapshotTimeFormat matches how the store hands out `timestamptz` columns
+// (see buildSelectExpr): UTC, RFC3339, millisecond precision — the same shape
+// JS Date.toISOString() produces. applyPing writes LastSeen directly rather
+// than going back to the row, so it has to format it identically or a client
+// would see the timestamp change shape between a ping-driven frame and a
+// refresh-driven one.
+const snapshotTimeFormat = "2006-01-02T15:04:05.000Z"
+
 // applyPing folds one telemetry ping into the snapshot without touching the
-// database. The ping already carries position and heading, which is the whole
-// reason the old per-ping `Vehicles.Get` was redundant. Status, plate and
-// location come from the vehicles row and are picked up by the next refresh —
-// bounded staleness of one interval, which is what the poll gave anyway.
+// database. The ping already carries position, heading, speed and its own
+// timestamp, which is the whole reason the old per-ping `Vehicles.Get` was
+// redundant. Status, plate and location come from the vehicles row and are
+// picked up by the next refresh — bounded staleness of one interval, which is
+// what the poll gave anyway.
 func (s *FleetSnapshotter) applyPing(p iot.Ping) {
 	if p.VehicleID == "" {
 		return
@@ -163,7 +176,16 @@ func (s *FleetSnapshotter) applyPing(p iot.Ping) {
 	if p.Heading != nil {
 		updated.Heading = *p.Heading
 	}
-	if updated == cur {
+	if p.SpeedKmh != nil {
+		updated.Speed = *p.SpeedKmh
+	}
+	// The ping is the vehicle reporting, so its timestamp IS last-seen. Taking
+	// it from here rather than waiting for the next refresh is what stops a
+	// marker moving under a stale "8 min ago" label.
+	if !p.TS.IsZero() {
+		updated.LastSeen = p.TS.UTC().Format(snapshotTimeFormat)
+	}
+	if !snapsDiffer(cur, updated) {
 		s.mu.Unlock()
 		return
 	}
@@ -256,13 +278,50 @@ func (s *FleetSnapshotter) notify() {
 // sameSnaps reports whether two snapshot maps are identical. fleetVehicleSnap
 // is all comparable fields, so == is enough and avoids reflect.DeepEqual on a
 // path that runs every interval.
+// lastSeenPublishGranularity is how far `last_seen` must move before it counts
+// as a change worth publishing a frame for.
+//
+// Every ping rewrites vehicles.last_seen, so comparing it exactly would make a
+// parked-but-still-reporting fleet republish the whole vehicle array on every
+// refresh tick — precisely the churn the version check exists to prevent. The
+// label this field feeds reads in minutes ("3 min ago"), so half a minute of
+// slack is invisible to the operator and collapses the noise.
+//
+// The comparison is always against the last PUBLISHED snapshot, never against
+// the last one seen: comparing against the last seen would find a ten-second
+// step every tick, never cross the threshold, and freeze last_seen forever.
+// That is why refresh and applyPing below only store a snapshot when they also
+// publish it.
+const lastSeenPublishGranularity = 30 * time.Second
+
+// snapsDiffer reports whether b is a change worth publishing relative to the
+// published snapshot a. Every field but LastSeen compares exactly.
+func snapsDiffer(a, b fleetVehicleSnap) bool {
+	if a.LastSeen != b.LastSeen {
+		x, errA := time.Parse(snapshotTimeFormat, a.LastSeen)
+		y, errB := time.Parse(snapshotTimeFormat, b.LastSeen)
+		// An empty or malformed timestamp on either side is not something to
+		// silently absorb — a vehicle reporting for the first time has no
+		// previous value at all, and that is a change.
+		if errA != nil || errB != nil {
+			return true
+		}
+		if d := y.Sub(x); d > lastSeenPublishGranularity || d < -lastSeenPublishGranularity {
+			return true
+		}
+		// Inside the window: ignore this field and compare the rest.
+		a.LastSeen, b.LastSeen = "", ""
+	}
+	return a != b
+}
+
 func sameSnaps(a, b map[string]fleetVehicleSnap) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for id, av := range a {
 		bv, ok := b[id]
-		if !ok || av != bv {
+		if !ok || snapsDiffer(av, bv) {
 			return false
 		}
 	}
