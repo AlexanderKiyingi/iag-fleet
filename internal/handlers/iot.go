@@ -258,9 +258,12 @@ func (h *IoT) ingestionGuide(c *gin.Context) {
 	}
 	if !configured {
 		httpBlock["error"] = "TELEMETRY_INGEST_URL is not set on this deployment — " +
-			"no HTTP ingest address to give out. Devices cannot report until the " +
-			"Fleet_IoT ingest listener has a publicly reachable address and this " +
-			"variable points at it."
+			"no HTTP ingest address to give out. Set it to the base a device should " +
+			"POST to: the API gateway's fleet prefix when ingest sits behind the " +
+			"gateway (the gateway already routes /api/v1/fleet/api/iot/pings to it " +
+			"and allows POST unauthenticated, so the device's own API key is what " +
+			"authenticates), or the ingest service's own public origin when it is " +
+			"exposed directly."
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"service": "Fleet_IoT",
@@ -297,7 +300,6 @@ func (h *IoT) ingestionGuide(c *gin.Context) {
 	})
 }
 
-
 // mergeIngestHTTP folds the ingest address into the guide's HTTP block, or
 // leaves the address out entirely when none is configured. Reporting a URL that
 // cannot be reached is worse than reporting none: it looks actionable.
@@ -310,11 +312,22 @@ func mergeIngestHTTP(head gin.H, configured bool, base string, body gin.H) gin.H
 		out[k] = v
 	}
 	if configured {
-		out["url"] = base + "/v1/pings"
-		out["legacyPath"] = base + "/api/iot/pings"
+		// /api/iot/pings, not /v1/pings, is the URL to hand an operator: the
+		// ingest serves both, but only this one also exists on the API gateway
+		// (prefix /api/v1/fleet/api/iot/pings, rewritten to /api/iot/pings).
+		// So it is correct whether the deployment exposes ingest directly or
+		// fronts it with the gateway, while /v1/pings 404s through the gateway.
+		// Advertising the path that works in one topology and not the other is
+		// how a device gets programmed against an endpoint that is not there.
+		out["url"] = base + "/api/iot/pings"
+		out["directPath"] = base + "/v1/pings"
+		out["directPathNote"] = "Served only by a directly-exposed ingest; " +
+			"the API gateway does not route it. Use `url` unless you are " +
+			"posting straight at the ingest service."
 	}
 	return out
 }
+
 // testPing inserts one synthetic ping for onboarding verification (uses device → vehicle binding).
 func (h *IoT) testPing(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

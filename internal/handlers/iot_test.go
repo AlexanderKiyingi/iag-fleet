@@ -91,11 +91,38 @@ func TestIngestionGuide_setIngestURLIsReported(t *testing.T) {
 	(&IoT{}).ingestionGuide(c)
 
 	body := w.Body.String()
-	// Trailing slash trimmed, and both the current and legacy paths given.
-	if !strings.Contains(body, "https://ingest.example.test/v1/pings") {
+	// Trailing slash trimmed. `url` is the one an operator programs, and it is
+	// /api/iot/pings because that path works both directly and through the
+	// gateway; /v1/pings is offered separately as direct-only.
+	if !strings.Contains(body, `"url":"https://ingest.example.test/api/iot/pings"`) {
 		t.Fatalf("ingest url missing or malformed: %s", body)
+	}
+	if !strings.Contains(body, `"directPath":"https://ingest.example.test/v1/pings"`) {
+		t.Fatalf("direct path missing: %s", body)
 	}
 	if !strings.Contains(body, `"configured":true`) {
 		t.Fatalf("guide did not report the address as configured: %s", body)
+	}
+}
+
+// The deployed topology fronts ingest with the API gateway, which routes only
+// /api/v1/fleet/api/iot/pings (rewritten to /api/iot/pings) and has no route for
+// /v1/pings. The guide used to advertise /v1/pings as the primary URL, so an
+// operator following it against the gateway base would program a device against
+// a 404 — the same class of failure as the unroutable compose hostname above:
+// silent, and indistinguishable from a fleet that simply never reports.
+func TestIngestionGuide_gatewayBaseYieldsRoutableURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("TELEMETRY_INGEST_URL", "https://gw.example.test/api/v1/fleet")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/iot/ingestion", nil)
+	(&IoT{}).ingestionGuide(c)
+
+	body := w.Body.String()
+	const want = `"url":"https://gw.example.test/api/v1/fleet/api/iot/pings"`
+	if !strings.Contains(body, want) {
+		t.Fatalf("guide did not hand out the gateway-routable endpoint: %s", body)
 	}
 }
