@@ -98,6 +98,29 @@ type createDeviceBody struct {
 	Label     string `json:"label"`
 	VehicleID string `json:"vehicleId"`
 	IssueKey  bool   `json:"issueKey"`
+	// Model had no writer anywhere: the column was added by migration 0035 to
+	// key the HQ status-word bit map and the immobilise encoder, the operator
+	// UI already sent it, and this struct silently dropped it. So it stayed
+	// empty on every device and both features were unreachable.
+	Model string `json:"model"`
+	// Fuel sensor mapping (migration 0047). Omitted leaves the column defaults,
+	// which are the Teltonika CAN-percent behaviour every device had before.
+	FuelIOID   *uint16  `json:"fuelIoId"`
+	FuelScale  *float64 `json:"fuelScale"`
+	FuelOffset *float64 `json:"fuelOffset"`
+}
+
+// validateFuelSensor rejects a mapping the database CHECK would reject anyway,
+// so the caller gets a sentence rather than a raw constraint violation.
+//
+// A negative or zero scale is the dangerous one: it inverts or flattens the
+// reading, and the fuel-event detector works on deltas, so an inverted sensor
+// reports every refuel as a siphoning alert.
+func validateFuelSensor(scale *float64) error {
+	if scale != nil && *scale <= 0 {
+		return fmt.Errorf("fuelScale must be greater than zero; use fuelIoId=0 to disable fuel decoding for this device")
+	}
+	return nil
 }
 
 func (h *IoT) createDevice(c *gin.Context) {
@@ -113,11 +136,20 @@ func (h *IoT) createDevice(c *gin.Context) {
 		}
 	}
 
+	if err := validateFuelSensor(body.FuelScale); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	created, err := h.Store.CreateDevice(c.Request.Context(), iot.CreateDeviceInput{
-		Serial:    body.Serial,
-		Label:     body.Label,
-		VehicleID: body.VehicleID,
-		IssueKey:  body.IssueKey,
+		Serial:     body.Serial,
+		Label:      body.Label,
+		VehicleID:  body.VehicleID,
+		IssueKey:   body.IssueKey,
+		Model:      body.Model,
+		FuelIOID:   body.FuelIOID,
+		FuelScale:  body.FuelScale,
+		FuelOffset: body.FuelOffset,
 	})
 	if err != nil {
 		respondIotError(c, err)
@@ -178,6 +210,13 @@ type updateDeviceBody struct {
 	Label     *string `json:"label"`
 	VehicleID *string `json:"vehicleId"`
 	IsActive  *bool   `json:"isActive"`
+	// Both of these are edits by nature: the model is usually read off the unit
+	// during fitment, and a probe's scale is measured against a known tank level
+	// once the sensor is in the vehicle — neither is known at registration.
+	Model      *string  `json:"model"`
+	FuelIOID   *uint16  `json:"fuelIoId"`
+	FuelScale  *float64 `json:"fuelScale"`
+	FuelOffset *float64 `json:"fuelOffset"`
 }
 
 func (h *IoT) updateDevice(c *gin.Context) {
@@ -200,10 +239,19 @@ func (h *IoT) updateDevice(c *gin.Context) {
 		}
 	}
 
+	if err := validateFuelSensor(body.FuelScale); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	d, err := h.Store.UpdateDevice(c.Request.Context(), id, iot.UpdateDeviceInput{
-		Label:     body.Label,
-		VehicleID: body.VehicleID,
-		IsActive:  body.IsActive,
+		Label:      body.Label,
+		VehicleID:  body.VehicleID,
+		IsActive:   body.IsActive,
+		Model:      body.Model,
+		FuelIOID:   body.FuelIOID,
+		FuelScale:  body.FuelScale,
+		FuelOffset: body.FuelOffset,
 	})
 	if err != nil {
 		respondIotError(c, err)
