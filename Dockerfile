@@ -27,7 +27,16 @@ FROM base AS fleet-iot-clone
 # fleet-iot read it as COALESCE(vehicle_id, ''), which Postgres refuses to
 # type-check. Every device read 500'd. The fix lives in fleet-iot, so leaving
 # this pin behind would have kept the outage with a green fleet build.
-ARG FLEET_IOT_REF=c3a18db
+#
+# Bumped to d6178d1: CreateDeviceInput and UpdateDeviceInput gained Model and
+# the fuel sensor mapping (FuelIOID/FuelScale/FuelOffset) so the device API can
+# finally write iot_devices.model and configure analog / LLS fuel sensors. This
+# one is new SYMBOLS rather than new behaviour, so it fails loudly at compile
+# time instead of silently at runtime — the monorepo target COPYs
+# edge/Fleet_IoT and so builds green against the working tree, which is exactly
+# how a stale pin gets missed locally. If you changed fleet and fleet-iot
+# together, bump this in the same commit.
+ARG FLEET_IOT_REF=d6178d1
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
