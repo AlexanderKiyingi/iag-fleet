@@ -83,6 +83,12 @@ func (h *IoT) Register(rg *gin.RouterGroup) {
 	rg.GET("/vehicles/:id/track/latest", auth.RequirePerm("view_telemetry"), h.requireStore, h.latest)
 	rg.GET("/vehicles/:id/track/stream", auth.RequirePerm("view_telemetry"), h.requireStore, h.stream)
 	rg.GET("/vehicles/:id/telemetry/daily", auth.RequirePerm("view_telemetry"), h.requireStore, h.telemetryDaily)
+	// Geofences are read by the live map to draw the sites a vehicle is
+	// measured against, so this reads with either fleet-view permission rather
+	// than the telemetry one — a dispatcher looking at the map is not asking
+	// for telemetry, and gating it on view_telemetry would have the map draw
+	// vehicles without the boundaries they are being judged against.
+	rg.GET("/geofence-pois", auth.RequireAnyPerm("view_vehicle", "view_telemetry"), h.requireStore, h.geofencePOIs)
 	rg.POST("/vehicles/:id/trips/detect", auth.RequirePerm("change_trip"), h.requireStore, h.detectTrips)
 
 	rg.GET("/vehicles/:id/fuel/history", fuelRead, h.requireStore, h.fuelHistory)
@@ -792,6 +798,47 @@ const ssePollInterval = 2 * time.Second
 
 // maxDailyTelemetryRange allows reading rolled-up history beyond raw ping retention.
 const maxDailyTelemetryRange = 365 * 24 * time.Hour
+
+// geofencePOI is the wire shape for GET /api/geofence-pois. iot.GeofencePOI
+// carries no JSON tags — it is an internal evaluation type — so the API shape
+// is declared here rather than leaking Go field names to the client.
+type geofencePOI struct {
+	Name     string  `json:"name"`
+	Lat      float64 `json:"lat"`
+	Lng      float64 `json:"lng"`
+	Type     string  `json:"type"`
+	RadiusKm float64 `json:"radiusKm"`
+}
+
+// geofencePOIs lists the active geofences.
+//
+// These have been evaluated on every ping since migration 0037 but were never
+// readable, so the operator map drew a hardcoded list compiled into the
+// frontend instead. The two had already diverged — the same port appeared with
+// a 1.5 km radius in the database and 8 km in the UI — which means the circle
+// on screen was not the circle a vehicle was being judged against, and an
+// arrival event could fire with the truck drawn well outside the fence.
+func (h *IoT) geofencePOIs(c *gin.Context) {
+	pois, err := h.Store.LoadGeofencePOIs(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// An empty table is not an error: the gateways fall back to their built-in
+	// set, so the honest answer is an empty list plus the flag saying the
+	// evaluated geofences are the defaults rather than these.
+	out := make([]geofencePOI, 0, len(pois))
+	for _, p := range pois {
+		out = append(out, geofencePOI{
+			Name: p.Name, Lat: p.Lat, Lng: p.Lng, Type: p.Type, RadiusKm: p.RadiusKm,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"pois":          out,
+		"count":         len(out),
+		"usingDefaults": len(out) == 0,
+	})
+}
 
 func (h *IoT) telemetryDaily(c *gin.Context) {
 	id := c.Param("id")
