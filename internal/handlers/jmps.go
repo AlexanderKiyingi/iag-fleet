@@ -23,6 +23,15 @@ func NewJMPs(repo *store.Repository, osrmBaseURL string) *JMPs {
 			Collection: repo.JMPs,
 			Entity:     "jmp",
 			IDPrefix:   "JMP",
+			// A journey plan moves through its gates, not through the form.
+			// dispatchStatus and mileageStatus are the two approval gates and
+			// status is what completing or cancelling the journey sets — each has
+			// an endpoint that records who approved it and when.
+			ServerOwnedFields: map[string]string{
+				"status":         "POST /api/jmps/:id/complete, /cancel or /complete-toolbox",
+				"dispatchStatus": "POST /api/jmps/:id/approve-dispatch",
+				"mileageStatus":  "POST /api/jmps/:id/approve-mileage",
+			},
 		},
 		RoutingOSRMURL: osrmBaseURL,
 	}

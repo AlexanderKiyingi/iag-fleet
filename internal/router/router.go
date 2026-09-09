@@ -140,8 +140,31 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 	// "view_<entity>", "add_<entity>", "change_<entity>", "delete_<entity>"
 	// resolve to real permissions.
 	handlers.NewVehicleResource(repo, opts.Events).Register(api, "/vehicles")
+	// Asset lifecycle is a transition, not a record edit — the vehicle resource
+	// refuses to carry the fields, so this is the only way they move.
+	(&handlers.VehicleLifecycle{Repo: repo, Events: opts.Events}).Register(api)
 
 	handlers.NewDriverResource(repo).Register(api, "/drivers")
+
+	// The driver–vehicle authorisation matrix (FR-DRV-04). Plain reference data:
+	// an operator defines the categories, the licence classes, and which class may
+	// operate which category. An empty matrix reads as "no opinion", so creating
+	// these records is what turns the dispatch rule on.
+	(&handlers.Resource[models.VehicleCategory, *models.VehicleCategory]{
+		Repo: repo, Collection: repo.VehicleCategories, Entity: "vehicle_category", IDPrefix: "VCT",
+	}).Register(api, "/vehicle-categories")
+
+	(&handlers.Resource[models.PermitClass, *models.PermitClass]{
+		Repo: repo, Collection: repo.PermitClasses, Entity: "permit_class", IDPrefix: "PCL",
+	}).Register(api, "/permit-classes")
+
+	(&handlers.Resource[models.PermitAuthorisation, *models.PermitAuthorisation]{
+		Repo: repo, Collection: repo.PermitAuthorisations, Entity: "permit_authorisation", IDPrefix: "PAU",
+		// Both references are NOT NULL uuids, so an unset one is a null-violation
+		// 502 rather than a sentence telling the caller what they left out.
+		BeforeCreate: handlers.RequireAuthorisationRefs,
+		BeforeUpdate: handlers.RequireAuthorisationRefs,
+	}).Register(api, "/permit-authorisations")
 
 	handlers.NewJMPs(repo, opts.RoutingOSRMURL).Register(api, "/jmps")
 
@@ -159,6 +182,13 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	(&handlers.Resource[models.MaintenanceItem, *models.MaintenanceItem]{
 		Repo: repo, Collection: repo.Maintenance, Entity: "maintenance_item", IDPrefix: "MX",
+		// Completion is what draws the parts, and it refuses a work order that is
+		// already completed. A form that could set the status directly left the
+		// WO completed on screen with no stock moved and no way to complete it
+		// properly, so the field belongs to the transitions.
+		ServerOwnedFields: map[string]string{
+			"status": "POST /api/maintenance/:id/complete or /advance-status",
+		},
 	}).Register(api, "/maintenance")
 
 	(&handlers.Resource[models.Part, *models.Part]{
@@ -180,6 +210,9 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	(&handlers.Resource[models.SafetyEvent, *models.SafetyEvent]{
 		Repo: repo, Collection: repo.Safety, Entity: "safety_event", IDPrefix: "SAF",
+		ServerOwnedFields: map[string]string{
+			"status": "POST /api/safety/:id/advance-status",
+		},
 	}).Register(api, "/safety")
 
 	handlers.NewComplianceResource(repo).Register(api, "/compliance")
