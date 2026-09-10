@@ -139,6 +139,21 @@ type Vehicle struct {
 	// the free-text Type above which in practice carries brand names. References
 	// vehicle_categories; see 0049 and the matrix in domain_validate.go.
 	CategoryID string `json:"categoryId,omitempty" db:"category_id" dbcast:"uuid"`
+
+	// SpeedLimitKmh is the per-vehicle overspeed threshold from migration 0036.
+	//
+	// The detector in fleet-iot reads this column directly
+	// (iot/overspeed.go: loadOverspeedContext), and nothing could ever WRITE it:
+	// there was no field here, so no API and no form, so it was NULL on every
+	// row and every vehicle fell back to the global FLEET_SPEED_LIMIT_KMH. The
+	// point of 0036 was a limit that is "per-vehicle, changeable without
+	// touching hardware", and half of that was missing.
+	//
+	// A pointer because the column has three meanings and they are all real:
+	// NULL falls back to the global limit, 0 disables monitoring for this
+	// vehicle, and a value is the limit. Collapsing NULL and 0 would silently
+	// switch monitoring off for every unconfigured vehicle.
+	SpeedLimitKmh *float64 `json:"speedLimitKmh,omitempty" db:"speed_limit_kmh"`
 	// Record timestamps (0050). Written by the touch_row trigger, which fires
 	// after the statement's SET list and therefore wins over whatever the
 	// reflective UPDATE binds — created_at is immutable, updated_at always
