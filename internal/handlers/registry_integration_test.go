@@ -67,7 +67,7 @@ func TestIntegration_VehicleCRUD(t *testing.T) {
 
 	repo := store.NewRepository(pool)
 	ctx := context.Background()
-	v := integrationVehicle("VEH-INT1", "INT-001")
+	v := integrationVehicle(testID("VEH-INT1"), "INT-001")
 
 	created, err := repo.Vehicles.Add(ctx, v)
 	if err != nil {
@@ -99,10 +99,10 @@ func TestIntegration_DuplicatePlateConflict(t *testing.T) {
 
 	repo := store.NewRepository(pool)
 	ctx := context.Background()
-	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-A", "DUP-PLATE")); err != nil {
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-A"), "DUP-PLATE")); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	_, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-B", "DUP-PLATE"))
+	_, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-B"), "DUP-PLATE"))
 	if err == nil {
 		t.Fatal("expected duplicate plate error")
 	}
@@ -123,7 +123,7 @@ func TestIntegration_IoTBindUnknownVehicle404(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	body, _ := json.Marshal(map[string]any{
-		"serial": "IMEI-INT-1", "vehicleId": "VEH-MISSING", "issueKey": false,
+		"serial": "IMEI-INT-1", "vehicleId": testID("VEH-MISSING"), "issueKey": false,
 	})
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/iot/devices", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
@@ -145,9 +145,9 @@ func TestIntegration_TrackUnknownVehicle404(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/api/vehicles/VEH-MISSING/track", nil)
-	c.Params = gin.Params{{Key: "id", Value: "VEH-MISSING"}}
+	c.Params = gin.Params{{Key: "id", Value: testID("VEH-MISSING")}}
 
-	if h.requireVehicleForTrack(c, "VEH-MISSING") {
+	if h.requireVehicleForTrack(c, testID("VEH-MISSING")) {
 		t.Fatal("expected validation failure")
 	}
 	if w.Code != http.StatusNotFound {
@@ -162,7 +162,7 @@ func TestIntegration_SyncVehicleStatusOutbox(t *testing.T) {
 
 	ctx := context.Background()
 	repo := store.NewRepository(pool)
-	v := integrationVehicle("VEH-SYNC", "SYNC-01")
+	v := integrationVehicle(testID("VEH-SYNC"), "SYNC-01")
 	v.Status = "offline"
 	if _, err := repo.Vehicles.Add(ctx, v); err != nil {
 		t.Fatalf("seed vehicle: %v", err)

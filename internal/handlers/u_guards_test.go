@@ -5,6 +5,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,8 +37,8 @@ func TestIntegration_DeploymentNoDoubleDeploy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	if _, err := repo.Deployment.Add(ctx, models.DeploymentDay{
-		ID: "DPL-1", Date: "2032-04-01", CompiledBy: "t",
-		Entries: models.DeploymentEntries{{ID: "DE1", VehicleID: "VEH-DD", DriverID: "DRV-DD"}},
+		ID: testID("DPL-1"), Date: "2032-04-01", CompiledBy: "t",
+		Entries: models.DeploymentEntries{{ID: "DE1", VehicleID: testID("VEH-DD"), DriverID: testID("DRV-DD")}},
 	}); err != nil {
 		t.Fatalf("seed deployment: %v", err)
 	}
@@ -45,22 +46,22 @@ func TestIntegration_DeploymentNoDoubleDeploy(t *testing.T) {
 	post := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
-		c.Params = gin.Params{{Key: "id", Value: "DPL-1"}}
+		c.Params = gin.Params{{Key: "id", Value: testID("DPL-1")}}
 		c.Request = httptest.NewRequest(http.MethodPost, "/api/deployment/DPL-1/entries", bytes.NewReader([]byte(body)))
 		c.Request.Header.Set("Content-Type", "application/json")
 		w.addDeploymentEntry(c)
 		return rec
 	}
-	if r := post(`{"vehicleId":"VEH-DD"}`); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "vehicle already") {
+	if r := post(fmt.Sprintf(`{"vehicleId":%q}`, testID("VEH-DD"))); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "vehicle already") {
 		t.Fatalf("dup vehicle: status %d body %q, want 409", r.Code, r.Body.String())
 	}
 	// vehicleId is required by the bind, so pair the duplicate driver with a
 	// vehicle that isn't already deployed — otherwise this asserts the vehicle
 	// guard a second time instead of the driver guard.
-	if r := post(`{"vehicleId":"VEH-DD2","driverId":"DRV-DD"}`); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "driver already") {
+	if r := post(fmt.Sprintf(`{"vehicleId":%q,"driverId":%q}`, testID("VEH-DD2"), testID("DRV-DD"))); r.Code != http.StatusConflict || !strings.Contains(r.Body.String(), "driver already") {
 		t.Fatalf("dup driver: status %d body %q, want 409", r.Code, r.Body.String())
 	}
-	if r := post(`{"vehicleId":"VEH-NEW","driverId":"DRV-NEW"}`); r.Code != http.StatusCreated {
+	if r := post(fmt.Sprintf(`{"vehicleId":%q,"driverId":%q}`, testID("VEH-NEW"), testID("DRV-NEW"))); r.Code != http.StatusCreated {
 		t.Fatalf("new entry: status %d, want 201; %s", r.Code, r.Body.String())
 	}
 }
@@ -73,34 +74,34 @@ func TestIntegration_DriverVehiclePairingSync(t *testing.T) {
 	ctx := context.Background()
 	gin.SetMode(gin.TestMode)
 
-	if _, err := repo.Drivers.Add(ctx, models.Driver{ID: "DRV-PR", Name: "T", PermitExpiry: "2032-12-31"}); err != nil {
+	if _, err := repo.Drivers.Add(ctx, models.Driver{ID: testID("DRV-PR"), Name: "T", PermitExpiry: "2032-12-31"}); err != nil {
 		t.Fatalf("seed driver: %v", err)
 	}
-	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-PR", "PR-1")); err != nil {
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-PR"), "PR-1")); err != nil {
 		t.Fatalf("seed vehicle: %v", err)
 	}
 	vr := NewVehicleResource(repo, nil)
 	dr := NewDriverResource(repo)
 
 	// Assign driver via the vehicle -> driver.vehicleId follows.
-	if r := patchCall(vr.patch, "VEH-PR", `{"driverId":"DRV-PR"}`); r.Code != http.StatusOK {
+	if r := patchCall(vr.patch, testID("VEH-PR"), fmt.Sprintf(`{"driverId":%q}`, testID("DRV-PR"))); r.Code != http.StatusOK {
 		t.Fatalf("assign via vehicle: status %d; %s", r.Code, r.Body.String())
 	}
-	if d, _ := repo.Drivers.Get(ctx, "DRV-PR"); d.VehicleID != "VEH-PR" {
+	if d, _ := repo.Drivers.Get(ctx, testID("DRV-PR")); d.VehicleID != testID("VEH-PR") {
 		t.Fatalf("driver.vehicleId = %q, want VEH-PR", d.VehicleID)
 	}
 	// Detach via the vehicle -> driver.vehicleId cleared.
-	if r := patchCall(vr.patch, "VEH-PR", `{"driverId":""}`); r.Code != http.StatusOK {
+	if r := patchCall(vr.patch, testID("VEH-PR"), `{"driverId":""}`); r.Code != http.StatusOK {
 		t.Fatalf("detach via vehicle: status %d; %s", r.Code, r.Body.String())
 	}
-	if d, _ := repo.Drivers.Get(ctx, "DRV-PR"); d.VehicleID != "" {
+	if d, _ := repo.Drivers.Get(ctx, testID("DRV-PR")); d.VehicleID != "" {
 		t.Fatalf("driver.vehicleId = %q after detach, want empty", d.VehicleID)
 	}
 	// Assign via the driver -> vehicle.driverId follows.
-	if r := patchCall(dr.patch, "DRV-PR", `{"vehicleId":"VEH-PR"}`); r.Code != http.StatusOK {
+	if r := patchCall(dr.patch, testID("DRV-PR"), fmt.Sprintf(`{"vehicleId":%q}`, testID("VEH-PR"))); r.Code != http.StatusOK {
 		t.Fatalf("assign via driver: status %d; %s", r.Code, r.Body.String())
 	}
-	if v, _ := repo.Vehicles.Get(ctx, "VEH-PR"); v.DriverID != "DRV-PR" {
+	if v, _ := repo.Vehicles.Get(ctx, testID("VEH-PR")); v.DriverID != testID("DRV-PR") {
 		t.Fatalf("vehicle.driverId = %q, want DRV-PR", v.DriverID)
 	}
 }
