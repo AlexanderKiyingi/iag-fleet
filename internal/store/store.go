@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -302,17 +303,41 @@ func (c *Collection[T, PT]) ListCapped(ctx context.Context, limit int) ([]T, err
 	return out, rows.Err()
 }
 
+// idLookupErr maps a malformed identifier onto ErrNotFound.
+//
+// Migration 0043 retyped every surrogate id from TEXT to uuid. Before it, a
+// lookup with a nonsense id simply matched no row and answered ErrNotFound, so
+// the API replied "vehicle not found". After it, Postgres rejects the value
+// before it can match anything (22P02 invalid_text_representation) and that
+// error travelled all the way out: a client sending a non-uuid id got a 500
+// carrying raw database text, SQLSTATE and column type included.
+//
+// An id that cannot be a uuid cannot name a row, so ErrNotFound is both the
+// honest answer and the one this API gave for years.
+//
+// Deliberately applied only where the id is the ONLY parameter. On an UPDATE
+// the arguments carry field values too, and a malformed uuid in one of those
+// means "bad field", not "no such row" — answering ErrNotFound there would
+// report a row missing when it is sitting right there.
+func idLookupErr(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "22P02" {
+		return ErrNotFound
+	}
+	return err
+}
+
 func (c *Collection[T, PT]) Get(ctx context.Context, id string) (T, error) {
 	var zero T
 	rows, err := c.pool.Query(ctx,
 		"SELECT "+c.selectExpr+" FROM "+c.table+" WHERE id = $1", id)
 	if err != nil {
-		return zero, err
+		return zero, idLookupErr(err)
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return zero, err
+			return zero, idLookupErr(err)
 		}
 		return zero, ErrNotFound
 	}
@@ -483,12 +508,12 @@ func (c *Collection[T, PT]) Update(ctx context.Context, id string, patch func(*T
 	rows, err := tx.Query(ctx,
 		"SELECT "+c.selectExpr+" FROM "+c.table+" WHERE id = $1 FOR UPDATE", id)
 	if err != nil {
-		return zero, err
+		return zero, idLookupErr(err)
 	}
 	if !rows.Next() {
 		rows.Close()
 		if err := rows.Err(); err != nil {
-			return zero, err
+			return zero, idLookupErr(err)
 		}
 		return zero, ErrNotFound
 	}
@@ -543,7 +568,7 @@ func (c *Collection[T, PT]) Update(ctx context.Context, id string, patch func(*T
 func (c *Collection[T, PT]) Delete(ctx context.Context, id string) error {
 	tag, err := c.pool.Exec(ctx, "DELETE FROM "+c.table+" WHERE id = $1", id)
 	if err != nil {
-		return err
+		return idLookupErr(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
