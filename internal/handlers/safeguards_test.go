@@ -90,7 +90,7 @@ func TestIntegration_MaintenanceCompleteOnce(t *testing.T) {
 	w := &Workflows{Repo: repo}
 
 	mx := models.MaintenanceItem{
-		ID: "MX-CMPL", VehicleID: "VEH-CMPL", Date: "2026-06-13", Type: "Service",
+		ID: testID("MX-CMPL"), VehicleID: testID("VEH-CMPL"), Date: "2026-06-13", Type: "Service",
 		Service: "oil", Status: "in-progress", Priority: "normal", Workshop: "W1",
 	}
 	if _, err := repo.Maintenance.Add(context.Background(), mx); err != nil {

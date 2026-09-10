@@ -24,13 +24,13 @@ func TestIntegration_PartOverdrawFlagged(t *testing.T) {
 	ctx := context.Background()
 	gin.SetMode(gin.TestMode)
 
-	if _, err := repo.Parts.Add(ctx, models.Part{ID: "PT-OD", Name: "Filter", Category: "Filters", SKU: "OD-1", Stock: 3}); err != nil {
+	if _, err := repo.Parts.Add(ctx, models.Part{ID: testID("PT-OD"), Name: "Filter", Category: "Filters", SKU: "OD-1", Stock: 3}); err != nil {
 		t.Fatalf("seed part: %v", err)
 	}
 	w := &Workflows{Repo: repo}
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	c.Params = gin.Params{{Key: "id", Value: "PT-OD"}}
+	c.Params = gin.Params{{Key: "id", Value: testID("PT-OD")}}
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/parts/PT-OD/movements", bytes.NewReader([]byte(`{"type":"out","qty":10}`)))
 	c.Request.Header.Set("Content-Type", "application/json")
 	w.partAdjustStock(c)
@@ -38,7 +38,7 @@ func TestIntegration_PartOverdrawFlagged(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("overdraw movement status %d, want 200; %s", rec.Code, rec.Body.String())
 	}
-	p, err := repo.Parts.Get(ctx, "PT-OD")
+	p, err := repo.Parts.Get(ctx, testID("PT-OD"))
 	if err != nil {
 		t.Fatalf("get part: %v", err)
 	}

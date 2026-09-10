@@ -34,7 +34,7 @@ func TestIntegration_JMPRejectsUnknownVehicle(t *testing.T) {
 	j := NewJMPs(repo, "")
 
 	w := postJSONTo(j.create, models.JMP{
-		ID: "JMP-REF", VehicleID: "VEH-NOPE", Purpose: "x",
+		ID: testID("JMP-REF"), VehicleID: "VEH-NOPE", Purpose: "x",
 		StartDate: "2032-01-01", ExpectedReturn: "2032-01-02", Status: "draft",
 	})
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "vehicle not found") {
@@ -50,16 +50,16 @@ func TestIntegration_DeleteBlockedByLiveJMP(t *testing.T) {
 	ctx := context.Background()
 	gin.SetMode(gin.TestMode)
 
-	if _, err := repo.JMPs.Add(ctx, integrationJMP("JMP-DEL", "VEH-DEL", "DRV-DEL", "2032-02-01", "2032-02-03", "active")); err != nil {
+	if _, err := repo.JMPs.Add(ctx, integrationJMP(testID("JMP-DEL"), testID("VEH-DEL"), testID("DRV-DEL"), "2032-02-01", "2032-02-03", "active")); err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
 
 	vr := NewVehicleResource(repo, nil)
-	if w := deleteCall(vr.remove, "VEH-DEL"); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "live journey") {
+	if w := deleteCall(vr.remove, testID("VEH-DEL")); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "live journey") {
 		t.Fatalf("vehicle delete: status %d body %q, want 409", w.Code, w.Body.String())
 	}
 	dr := NewDriverResource(repo)
-	if w := deleteCall(dr.remove, "DRV-DEL"); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "live journey") {
+	if w := deleteCall(dr.remove, testID("DRV-DEL")); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "live journey") {
 		t.Fatalf("driver delete: status %d body %q, want 409", w.Code, w.Body.String())
 	}
 }
@@ -74,18 +74,18 @@ func TestIntegration_BulkDeleteHonorsGuard(t *testing.T) {
 	ctx := context.Background()
 	gin.SetMode(gin.TestMode)
 
-	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-BUSY", "BSY-1")); err != nil {
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-BUSY"), "BSY-1")); err != nil {
 		t.Fatalf("seed busy vehicle: %v", err)
 	}
-	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-FREE", "FRE-1")); err != nil {
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-FREE"), "FRE-1")); err != nil {
 		t.Fatalf("seed free vehicle: %v", err)
 	}
-	if _, err := repo.JMPs.Add(ctx, integrationJMP("JMP-BULK", "VEH-BUSY", "DRV-BULK", "2032-03-01", "2032-03-03", "active")); err != nil {
+	if _, err := repo.JMPs.Add(ctx, integrationJMP(testID("JMP-BULK"), testID("VEH-BUSY"), testID("DRV-BULK"), "2032-03-01", "2032-03-03", "active")); err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
 
 	vr := NewVehicleResource(repo, nil)
-	w := postJSONTo(vr.bulkDelete, gin.H{"ids": []string{"VEH-BUSY", "VEH-FREE"}})
+	w := postJSONTo(vr.bulkDelete, gin.H{"ids": []string{testID("VEH-BUSY"), testID("VEH-FREE")}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("bulk delete: status %d, want 200; %s", w.Code, w.Body.String())
 	}
@@ -93,14 +93,14 @@ func TestIntegration_BulkDeleteHonorsGuard(t *testing.T) {
 	if !strings.Contains(body, `"deleted":1`) {
 		t.Fatalf("bulk delete: want deleted:1, got %s", body)
 	}
-	if !strings.Contains(body, "VEH-BUSY") || !strings.Contains(body, "live journey") {
+	if !strings.Contains(body, testID("VEH-BUSY")) || !strings.Contains(body, "live journey") {
 		t.Fatalf("bulk delete: want VEH-BUSY blocked by live journey, got %s", body)
 	}
 	// The free vehicle is gone; the busy one survives the guard.
-	if _, err := repo.Vehicles.Get(ctx, "VEH-FREE"); err == nil {
+	if _, err := repo.Vehicles.Get(ctx, testID("VEH-FREE")); err == nil {
 		t.Fatalf("VEH-FREE should have been deleted")
 	}
-	if _, err := repo.Vehicles.Get(ctx, "VEH-BUSY"); err != nil {
+	if _, err := repo.Vehicles.Get(ctx, testID("VEH-BUSY")); err != nil {
 		t.Fatalf("VEH-BUSY should have survived the guard, got %v", err)
 	}
 }
@@ -113,28 +113,28 @@ func TestIntegration_TyrePositionUnique(t *testing.T) {
 	ctx := context.Background()
 	gin.SetMode(gin.TestMode)
 
-	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-TYR", "TYR-1")); err != nil {
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-TYR"), "TYR-1")); err != nil {
 		t.Fatalf("seed vehicle: %v", err)
 	}
 	tr := NewTyreResource(repo)
 	mk := func(id, pos, status string) models.Tyre {
 		// tyres.mounted_date is NOT NULL (0001_initial).
-		return models.Tyre{ID: id, VehicleID: "VEH-TYR", Position: pos, Status: status, Brand: "B", MountedDate: "2031-01-15"}
+		return models.Tyre{ID: id, VehicleID: testID("VEH-TYR"), Position: pos, Status: status, Brand: "B", MountedDate: "2031-01-15"}
 	}
-	if w := postJSONTo(tr.create, mk("TR1", "FL", "good")); w.Code != http.StatusCreated {
+	if w := postJSONTo(tr.create, mk(testID("TR1"), "FL", "good")); w.Code != http.StatusCreated {
 		t.Fatalf("first FL tyre: status %d; %s", w.Code, w.Body.String())
 	}
-	if w := postJSONTo(tr.create, mk("TR2", "FL", "good")); w.Code != http.StatusConflict {
+	if w := postJSONTo(tr.create, mk(testID("TR2"), "FL", "good")); w.Code != http.StatusConflict {
 		t.Fatalf("second FL tyre: status %d, want 409; %s", w.Code, w.Body.String())
 	}
-	if w := postJSONTo(tr.create, mk("TR3", "FR", "good")); w.Code != http.StatusCreated {
+	if w := postJSONTo(tr.create, mk(testID("TR3"), "FR", "good")); w.Code != http.StatusCreated {
 		t.Fatalf("FR tyre: status %d, want 201; %s", w.Code, w.Body.String())
 	}
 	// A retired tyre at a position doesn't block a fresh mount there.
-	if _, err := repo.Tyres.Add(ctx, mk("TR4", "RL", "replaced")); err != nil {
+	if _, err := repo.Tyres.Add(ctx, mk(testID("TR4"), "RL", "replaced")); err != nil {
 		t.Fatalf("seed retired tyre: %v", err)
 	}
-	if w := postJSONTo(tr.create, mk("TR5", "RL", "good")); w.Code != http.StatusCreated {
+	if w := postJSONTo(tr.create, mk(testID("TR5"), "RL", "good")); w.Code != http.StatusCreated {
 		t.Fatalf("RL tyre over retired: status %d, want 201; %s", w.Code, w.Body.String())
 	}
 	// Unknown vehicle is rejected.

@@ -100,7 +100,7 @@ func seedActiveJMP(t *testing.T, pool *pgxpool.Pool, driverID, vehicleID string)
 		INSERT INTO jmps (id, vehicle_id, driver_id, purpose, start_date, expected_arrival,
 			expected_return, mileage_status, status, created_by)
 		VALUES ($1, $2, $3, 'test', $4, $5, $5, 'Pending', 'active', 'test')`,
-		"JMP-"+driverID, vehicleID, driverID, start, end)
+		testID("JMP-"+driverID), vehicleID, driverID, start, end)
 	if err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
@@ -115,13 +115,13 @@ func TestIntegration_DriverLocation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	// Linked driver + vehicle + active journey covering today.
-	v := integrationVehicle("VEH-LOC", "LOC-01")
+	v := integrationVehicle(testID("VEH-LOC"), "LOC-01")
 	v.Status = "offline"
 	if _, err := repo.Vehicles.Add(ctx, v); err != nil {
 		t.Fatalf("seed vehicle: %v", err)
 	}
-	uid := seedLinkedDriver(t, pool, "DRV-LOC")
-	seedActiveJMP(t, pool, "DRV-LOC", v.ID)
+	uid := seedLinkedDriver(t, pool, testID("DRV-LOC"))
+	seedActiveJMP(t, pool, testID("DRV-LOC"), v.ID)
 
 	t.Run("happy path syncs the vehicle", func(t *testing.T) {
 		speed := 12.5
@@ -162,7 +162,7 @@ func TestIntegration_DriverLocation(t *testing.T) {
 	})
 
 	t.Run("linked driver without active journey 409", func(t *testing.T) {
-		uid2 := seedLinkedDriver(t, pool, "DRV-IDLE") // no JMP for this one
+		uid2 := seedLinkedDriver(t, pool, testID("DRV-IDLE")) // no JMP for this one
 		w := postDriverLocation(h, uid2, map[string]any{"lat": 0.40, "lng": 32.60})
 		if w.Code != http.StatusConflict {
 			t.Fatalf("status %d body %q, want 409", w.Code, w.Body.String())
@@ -177,12 +177,12 @@ func TestIntegration_DriverLocation(t *testing.T) {
 	})
 
 	t.Run("email bootstrap auto-links on first report", func(t *testing.T) {
-		v2 := integrationVehicle("VEH-BOOT", "BOOT-01")
+		v2 := integrationVehicle(testID("VEH-BOOT"), "BOOT-01")
 		if _, err := repo.Vehicles.Add(ctx, v2); err != nil {
 			t.Fatalf("seed vehicle: %v", err)
 		}
-		seedUnlinkedDriver(t, pool, "DRV-BOOT", "boot@example.com")
-		seedActiveJMP(t, pool, "DRV-BOOT", v2.ID)
+		seedUnlinkedDriver(t, pool, testID("DRV-BOOT"), "boot@example.com")
+		seedActiveJMP(t, pool, testID("DRV-BOOT"), v2.ID)
 
 		uid := uuid.New()
 		// Email casing differs from the stored row to prove the match is
@@ -194,7 +194,7 @@ func TestIntegration_DriverLocation(t *testing.T) {
 		// The link must now be durable: the driver row carries the subject UUID.
 		var linked string
 		if err := pool.QueryRow(ctx,
-			`SELECT platform_user_id::text FROM drivers WHERE id = 'DRV-BOOT'`).Scan(&linked); err != nil {
+			`SELECT platform_user_id::text FROM drivers WHERE id = $1`, testID("DRV-BOOT")).Scan(&linked); err != nil {
 			t.Fatalf("read link: %v", err)
 		}
 		if linked != uid.String() {
@@ -208,8 +208,8 @@ func TestIntegration_DriverLocation(t *testing.T) {
 	})
 
 	t.Run("ambiguous email does not auto-link 403", func(t *testing.T) {
-		seedUnlinkedDriver(t, pool, "DRV-AMB1", "shared@example.com")
-		seedUnlinkedDriver(t, pool, "DRV-AMB2", "shared@example.com")
+		seedUnlinkedDriver(t, pool, testID("DRV-AMB1"), "shared@example.com")
+		seedUnlinkedDriver(t, pool, testID("DRV-AMB2"), "shared@example.com")
 		w := postDriverLocationWithEmail(h, uuid.New(), "shared@example.com", map[string]any{"lat": 0.41, "lng": 32.61})
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("status %d, want 403 (ambiguous match must not auto-link)", w.Code)

@@ -31,7 +31,7 @@ func TestIntegration_HaulaParityFieldsRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	se := models.SafetyEvent{
-		ID: "SE-INT1", VehicleID: "VEH-INT", Date: "2026-06-13T00:00:00Z",
+		ID: testID("SE-INT1"), VehicleID: testID("VEH-INT"), Date: "2026-06-13T00:00:00Z",
 		Type: "Mechanical failure", Severity: "crit", Status: "open",
 		Description: "Engine cut-out", ReportedBy: "Driver",
 		GpsLat: ptrF(-0.795), GpsLng: ptrF(30.180), Injuries: ptrI(0),
@@ -49,9 +49,9 @@ func TestIntegration_HaulaParityFieldsRoundTrip(t *testing.T) {
 	}
 
 	mx := models.MaintenanceItem{
-		ID: "MX-INT1", VehicleID: "VEH-INT", Date: "2026-06-13", Type: "Repair",
+		ID: testID("MX-INT1"), VehicleID: testID("VEH-INT"), Date: "2026-06-13", Type: "Repair",
 		Service: "x", Status: "scheduled", Priority: "high", Workshop: "W1",
-		Mechanic: "J. Mukasa", LinkedSafetyID: "SE-INT1",
+		Mechanic: "J. Mukasa", LinkedSafetyID: testID("SE-INT1"),
 	}
 	if _, err := repo.Maintenance.Add(ctx, mx); err != nil {
 		t.Fatalf("add maintenance: %v", err)
@@ -60,7 +60,7 @@ func TestIntegration_HaulaParityFieldsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get maintenance: %v", err)
 	}
-	if gotMx.Mechanic != "J. Mukasa" || gotMx.LinkedSafetyID != "SE-INT1" {
+	if gotMx.Mechanic != "J. Mukasa" || gotMx.LinkedSafetyID != testID("SE-INT1") {
 		t.Fatalf("maintenance new fields did not round-trip: %+v", gotMx)
 	}
 }
@@ -74,7 +74,7 @@ func TestIntegration_SafetyCreateWO(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	se := models.SafetyEvent{
-		ID: "SE-INT2", VehicleID: "VEH-INT", Date: "2026-06-13T00:00:00Z",
+		ID: testID("SE-INT2"), VehicleID: testID("VEH-INT"), Date: "2026-06-13T00:00:00Z",
 		Type: "Mechanical failure", Severity: "crit", Status: "open",
 		Description: "Brake failure", ReportedBy: "Driver",
 	}
@@ -131,7 +131,7 @@ func TestIntegration_FuelConfirmAnomaly(t *testing.T) {
 
 	yes := true
 	fr := models.FuelRecord{
-		ID: "FR-INT1", VehicleID: "VEH-INT", Date: "2026-06-13",
+		ID: testID("FR-INT1"), VehicleID: testID("VEH-INT"), Date: "2026-06-13",
 		Litres: 10, UnitPrice: 5000, Total: 50000, Station: "Shell",
 		Anomaly: &yes, AnomalyStatus: "open",
 	}

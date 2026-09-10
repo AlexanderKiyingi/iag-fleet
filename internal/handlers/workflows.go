@@ -1541,11 +1541,19 @@ func (w *Workflows) maintenanceComplete(c *gin.Context) {
 
 	// Read the WO and its breakdown under FOR UPDATE so we don't race
 	// with a concurrent /maintenance/:id PATCH editing the breakdown.
+	//
+	// pm_schedule_id and vehicle_id are cast to text before COALESCE. Migration
+	// 0043 retyped both to uuid, and COALESCE(uuid, '') does not type-check:
+	// Postgres has to find a common type, tries to read '' as a uuid, and the
+	// whole SELECT fails with 22P02. Since this is the first statement in the
+	// handler, completing ANY work order returned 500 from the moment 0043
+	// landed. The reflective store layer already casts for this exact reason
+	// (see the "uuid" case in store.go); this hand-written query did not.
 	var status, pmScheduleID, vehicleID, woDate string
 	var odo float64
 	var breakdownRaw []byte
 	if err := tx.QueryRow(ctx,
-		`SELECT status, parts_breakdown, COALESCE(pm_schedule_id,''), COALESCE(vehicle_id,''), odo, COALESCE(date::text,'')
+		`SELECT status, parts_breakdown, COALESCE(pm_schedule_id::text,''), COALESCE(vehicle_id::text,''), odo, COALESCE(date::text,'')
 		   FROM maintenance_items WHERE id = $1 FOR UPDATE`,
 		id,
 	).Scan(&status, &breakdownRaw, &pmScheduleID, &vehicleID, &odo, &woDate); err != nil {

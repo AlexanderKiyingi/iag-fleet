@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,22 +49,22 @@ func TestIntegration_JMPActiveRequiresToolbox(t *testing.T) {
 	// passes, so the referenced driver/vehicle have to exist for the
 	// toolbox-completed case to reach 201.
 	ctx := context.Background()
-	if _, err := repo.Vehicles.Add(ctx, integrationVehicle("VEH-TB", "TB-1")); err != nil {
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-TB"), "TB-1")); err != nil {
 		t.Fatalf("seed vehicle: %v", err)
 	}
-	if _, err := repo.Drivers.Add(ctx, integrationDriver("DRV-TB")); err != nil {
+	if _, err := repo.Drivers.Add(ctx, integrationDriver(testID("DRV-TB"))); err != nil {
 		t.Fatalf("seed driver: %v", err)
 	}
 
 	active := func(id string, completed bool) models.JMP {
-		j := integrationJMP(id, "VEH-TB", "DRV-TB", "2031-02-01", "2031-02-03", "active")
+		j := integrationJMP(id, testID("VEH-TB"), testID("DRV-TB"), "2031-02-01", "2031-02-03", "active")
 		j.Toolbox = models.Toolbox{Completed: completed}
 		return j
 	}
-	if w := postJSONTo(j.create, active("JMP-TB1", false)); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "toolbox") {
+	if w := postJSONTo(j.create, active(testID("JMP-TB1"), false)); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "toolbox") {
 		t.Fatalf("active-without-toolbox: status %d body %q, want 409 + toolbox", w.Code, w.Body.String())
 	}
-	if w := postJSONTo(j.create, active("JMP-TB2", true)); w.Code != http.StatusCreated {
+	if w := postJSONTo(j.create, active(testID("JMP-TB2"), true)); w.Code != http.StatusCreated {
 		t.Fatalf("active-with-toolbox: status %d, want 201; %s", w.Code, w.Body.String())
 	}
 }
@@ -77,15 +78,20 @@ func TestIntegration_RequestAssignPatchBlocked(t *testing.T) {
 	ctx := context.Background()
 	gin.SetMode(gin.TestMode)
 
-	if _, err := repo.Drivers.Add(ctx, models.Driver{ID: "DRV-RQ", Name: "T", PermitExpiry: "2031-12-31"}); err != nil {
+	if _, err := repo.Drivers.Add(ctx, models.Driver{ID: testID("DRV-RQ"), Name: "T", PermitExpiry: "2031-12-31"}); err != nil {
 		t.Fatalf("seed driver: %v", err)
 	}
 	// A live journey occupying the driver, NOT sourced from our request.
-	if _, err := repo.JMPs.Add(ctx, integrationJMP("JMP-RQ", "VEH-OTHER", "DRV-RQ", "2031-03-01", "2031-03-05", "active")); err != nil {
+	if _, err := repo.JMPs.Add(ctx, integrationJMP(testID("JMP-RQ"), testID("VEH-OTHER"), testID("DRV-RQ"), "2031-03-01", "2031-03-05", "active")); err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
+	// The PATCH below assigns this vehicle. Without the row the handler answers
+	// "vehicle not found" and never reaches the driver-overlap guard under test.
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-RQ"), "RQ-1")); err != nil {
+		t.Fatalf("seed vehicle: %v", err)
+	}
 	if _, err := repo.Requests.Add(ctx, models.ServiceRequest{
-		ID: "REQ-RQ", RequesterName: "R", RequesterDept: "Ops", Purpose: "x",
+		ID: testID("REQ-RQ"), RequesterName: "R", RequesterDept: "Ops", Purpose: "x",
 		Destination: "Y", StartDate: "2031-03-03", EndDate: "2031-03-04", Status: "approved",
 		SubmittedAt: "2031-03-01T08:00:00Z",
 	}); err != nil {
@@ -95,8 +101,9 @@ func TestIntegration_RequestAssignPatchBlocked(t *testing.T) {
 	rr := NewRequestResource(repo, nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Params = gin.Params{{Key: "id", Value: "REQ-RQ"}}
-	body := []byte(`{"assignedDriverId":"DRV-RQ","assignedVehicleId":"VEH-RQ"}`)
+	c.Params = gin.Params{{Key: "id", Value: testID("REQ-RQ")}}
+	body := fmt.Appendf(nil, `{"assignedDriverId":%q,"assignedVehicleId":%q}`,
+		testID("DRV-RQ"), testID("VEH-RQ"))
 	c.Request = httptest.NewRequest(http.MethodPatch, "/api/requests/REQ-RQ", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	rr.patch(c)

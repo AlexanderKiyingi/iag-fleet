@@ -44,7 +44,7 @@ func seedAssignedRequest(t *testing.T, repo *store.Repository, id string, approv
 	r := models.ServiceRequest{
 		ID: id, RequesterName: "R", RequesterDept: "Ops", Purpose: "x",
 		Destination: "Y", StartDate: "2031-05-01", EndDate: "2031-05-02", Status: "assigned",
-		AssignedVehicleID: "VEH-" + id, AssignedDriverID: "DRV-" + id,
+		AssignedVehicleID: testID("VEH-" + id), AssignedDriverID: testID("DRV-" + id),
 		// NOT NULL with a DEFAULT, but the generic insert binds the column
 		// explicitly, so the default never applies.
 		SubmittedAt: "2031-04-29T08:00:00Z",
@@ -69,16 +69,16 @@ func TestIntegration_GateOrderDeployRequiresApproval(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := &Workflows{Repo: repo, Config: config.Config{GateOrderingEnabled: true}}
 
-	seedAssignedRequest(t, repo, "REQ-GATE-DEP", false, false)
+	seedAssignedRequest(t, repo, testID("REQ-GATE-DEP"), false, false)
 
 	// Out of order, no override → 409.
-	if rr := postParamTo(w.deployRequest, "REQ-GATE-DEP", nil); rr.Code != http.StatusConflict ||
+	if rr := postParamTo(w.deployRequest, testID("REQ-GATE-DEP"), nil); rr.Code != http.StatusConflict ||
 		!strings.Contains(rr.Body.String(), "approved") {
 		t.Fatalf("deploy before approval: status %d body %q, want 409 + approved", rr.Code, rr.Body.String())
 	}
 
 	// Override (superuser holds gate-override) → proceeds.
-	if rr := postParamTo(w.deployRequest, "REQ-GATE-DEP", &authclient.Claims{IsSuperuser: true}); rr.Code != http.StatusOK {
+	if rr := postParamTo(w.deployRequest, testID("REQ-GATE-DEP"), &authclient.Claims{IsSuperuser: true}); rr.Code != http.StatusOK {
 		t.Fatalf("deploy with override: status %d, want 200; %s", rr.Code, rr.Body.String())
 	}
 }
@@ -92,9 +92,9 @@ func TestIntegration_GateOrderDisabledAllowsOutOfOrder(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := &Workflows{Repo: repo, Config: config.Config{GateOrderingEnabled: false}}
 
-	seedAssignedRequest(t, repo, "REQ-GATE-OFF", false, false)
+	seedAssignedRequest(t, repo, testID("REQ-GATE-OFF"), false, false)
 
-	if rr := postParamTo(w.deployRequest, "REQ-GATE-OFF", nil); rr.Code != http.StatusOK {
+	if rr := postParamTo(w.deployRequest, testID("REQ-GATE-OFF"), nil); rr.Code != http.StatusOK {
 		t.Fatalf("deploy with gate off: status %d, want 200; %s", rr.Code, rr.Body.String())
 	}
 }
@@ -109,7 +109,7 @@ func TestIntegration_GateOrderJMPCompleteBlockedOnRejectedDispatch(t *testing.T)
 	w := &Workflows{Repo: repo, Config: config.Config{GateOrderingEnabled: true}}
 
 	if _, err := repo.JMPs.Add(ctx, func() models.JMP {
-		j := integrationJMP("JMP-GATE", "VEH-G", "DRV-G", "2031-06-01", "2031-06-03", "active")
+		j := integrationJMP(testID("JMP-GATE"), testID("VEH-G"), testID("DRV-G"), "2031-06-01", "2031-06-03", "active")
 		j.Toolbox = models.Toolbox{Completed: true}
 		j.DispatchStatus = "Rejected"
 		return j
@@ -117,16 +117,16 @@ func TestIntegration_GateOrderJMPCompleteBlockedOnRejectedDispatch(t *testing.T)
 		t.Fatalf("seed jmp: %v", err)
 	}
 
-	if rr := postParamTo(w.completeJmp, "JMP-GATE", nil); rr.Code != http.StatusConflict ||
+	if rr := postParamTo(w.completeJmp, testID("JMP-GATE"), nil); rr.Code != http.StatusConflict ||
 		!strings.Contains(rr.Body.String(), "dispatch") {
 		t.Fatalf("complete with rejected dispatch: status %d body %q, want 409 + dispatch", rr.Code, rr.Body.String())
 	}
 
 	// Once dispatch is approved, completion proceeds.
-	if _, err := repo.JMPs.Update(ctx, "JMP-GATE", func(j *models.JMP) { j.DispatchStatus = "Approved" }); err != nil {
+	if _, err := repo.JMPs.Update(ctx, testID("JMP-GATE"), func(j *models.JMP) { j.DispatchStatus = "Approved" }); err != nil {
 		t.Fatalf("approve dispatch: %v", err)
 	}
-	if rr := postParamTo(w.completeJmp, "JMP-GATE", nil); rr.Code != http.StatusOK {
+	if rr := postParamTo(w.completeJmp, testID("JMP-GATE"), nil); rr.Code != http.StatusOK {
 		t.Fatalf("complete with approved dispatch: status %d, want 200; %s", rr.Code, rr.Body.String())
 	}
 }
