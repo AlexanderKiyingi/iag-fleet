@@ -56,9 +56,31 @@ So the public device endpoint already exists as a route:
 POST https://iag-api-gateway-production.up.railway.app/api/v1/fleet/api/iot/pings
 ```
 
-It answers **502** today, which is the gateway saying `UPSTREAM_FLEET_IOT_INGEST`
-is configured but nothing is listening behind it. Start the listener on the
-private network and the 502 becomes a working endpoint.
+It answers **401** as of 2026-09-11 — measured, not assumed:
+
+```
+$ curl -X POST -d '{"lat":0,"lng":0}' …/api/v1/fleet/api/iot/pings
+{"error":"missing Authorization: Bearer <api-key>"}
+```
+
+That 401 is the *ingest itself* asking for a device key, so the route, the
+upstream and the listener are all live. It previously answered **502**, which
+was the gateway reporting `UPSTREAM_FLEET_IOT_INGEST` configured with nothing
+behind it.
+
+Read the three refusals apart before concluding anything — a device on a GPRS
+SIM cannot tell you which one it hit, it simply never reports:
+
+| Code | Body | Means |
+|---|---|---|
+| 401 | `missing Authorization: Bearer <api-key>` | reached the ingest; healthy |
+| 403 | `no_route_policy` | the gateway refused it before routing |
+| 502 | — | gateway has an upstream configured, nothing listening |
+
+`npm run test:ingest` (`scripts/test-telemetry-ingest.mts` in iag-fleet) asserts
+all of these, including that `/v1/pings` stays unrouted through the gateway —
+the ingest serves that path, the gateway does not, and a device programmed
+against it fails silently.
 
 **`TELEMETRY_INGEST_URL` on the fleet service.** `GET /api/iot/ingestion` is what
 an operator reads to find where to send data. Until this is set it reports
