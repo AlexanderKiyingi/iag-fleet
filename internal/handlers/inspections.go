@@ -24,6 +24,14 @@ func (h *Inspections) Register(rg *gin.RouterGroup) {
 	ins := Resource[models.VehicleInspection, *models.VehicleInspection]{
 		Repo: h.Repo, Collection: h.Repo.Inspections,
 		Entity: "vehicle_inspection", IDPrefix: "INS",
+		// Submission is what grades the checklist: it walks the template's
+		// required items against the recorded results, raises a defect for every
+		// failure or unanswered item, and only then decides passed / failed. A
+		// form that could set the status directly would let an inspection be
+		// marked passed without any of that having run.
+		ServerOwnedFields: map[string]string{
+			"status": "POST /api/inspections/:id/submit",
+		},
 	}
 	ins.Register(rg, "/inspections")
 

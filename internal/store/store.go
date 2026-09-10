@@ -873,6 +873,67 @@ func (c *Collection[T, PT]) Spec() ColumnSpec {
 	return ColumnSpec{Table: c.table, Columns: cols}
 }
 
+// VerifyUnmappedColumns reports the other direction: columns the database has
+// that no model maps, as "table.column", sorted.
+//
+// VerifySchema below catches a model field shipped ahead of its migration,
+// which fails loudly — every read of the table 500s. This catches the quiet
+// inverse: a migration applied and the model never updated. The table keeps
+// working, and the column is simply invisible to every caller.
+//
+// That is not hypothetical. Migration 0045 added jmps.notes for the express
+// purpose of stopping the browser discarding journey-plan notes; the JMP struct
+// never gained the field, the column list is derived from those struct tags, and
+// notes went on being lost for exactly as long as nobody looked. Nothing about
+// it is a compile error, a failing test or a 500.
+//
+// Advisory, not a deploy gate: an unmapped column breaks nothing at runtime, and
+// several are deliberate (see the ignore list in the caller).
+func VerifyUnmappedColumns(ctx context.Context, pool *pgxpool.Pool, specs []ColumnSpec) ([]string, error) {
+	mapped := make(map[string]map[string]bool, len(specs))
+	tables := make([]string, 0, len(specs))
+	for _, sp := range specs {
+		cols := make(map[string]bool, len(sp.Columns))
+		for _, c := range sp.Columns {
+			cols[c] = true
+		}
+		mapped[sp.Table] = cols
+		tables = append(tables, sp.Table)
+	}
+
+	// to_regclass for the same reason VerifySchema uses it: fleet shares a
+	// database and runs with search_path = "iag_fleet, public", so a table name
+	// may resolve to either schema and restricting to current_schema() would
+	// report a table that lives in public as missing.
+	rows, err := pool.Query(ctx,
+		`SELECT t.name, a.attname
+		   FROM unnest($1::text[]) AS t(name)
+		   JOIN pg_attribute a
+		     ON a.attrelid = to_regclass(t.name)
+		    AND a.attnum > 0
+		    AND NOT a.attisdropped`, tables)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var unmapped []string
+	for rows.Next() {
+		var table, column string
+		if err := rows.Scan(&table, &column); err != nil {
+			return nil, err
+		}
+		if !mapped[table][column] {
+			unmapped = append(unmapped, table+"."+column)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Strings(unmapped)
+	return unmapped, nil
+}
+
 // VerifySchema reports columns the models select that the database lacks,
 // as "table.column", sorted.
 //

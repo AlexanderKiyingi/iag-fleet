@@ -98,6 +98,7 @@ func main() {
 
 	repo := store.NewRepository(operationalPool)
 	repo.AttachTelemetry(telemetryPool)
+	reportSchemaDrift(context.Background(), operationalPool, repo)
 	iotStore := iot.NewSplitStore(operationalPool, telemetryPool)
 	verifier := authclient.NewVerifier(authclient.Options{
 		JWKSURL:  cfg.JWKSURL,
@@ -440,4 +441,59 @@ func autoMigrate(parent context.Context, pool *pgxpool.Pool) error {
 		slog.Info("seed.sql applied")
 	}
 	return nil
+}
+
+// unmappedColumnsAllowlist are database columns no model maps on purpose.
+//
+// Every other name VerifyUnmappedColumns returns is a migration whose model
+// never followed — the jmps.notes shape, where the column exists, the table
+// works, and the data in it is invisible to every caller.
+var unmappedColumnsAllowlist = map[string]bool{}
+
+// reportSchemaDrift compares the models against the live schema in both
+// directions and says what it finds.
+//
+// Missing columns are fatal: the model selects them on every read, so the table
+// answers `column "x" does not exist` as a 500 per request with nothing at boot
+// to explain it. That has happened twice (see VerifySchema).
+//
+// Unmapped columns only warn. Nothing breaks at runtime — the column is simply
+// unreadable and unwritable through the API — so refusing to serve over one
+// would trade a quiet data gap for an outage.
+func reportSchemaDrift(parent context.Context, pool *pgxpool.Pool, repo *store.Repository) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+
+	specs := repo.SchemaSpecs()
+
+	missing, err := store.VerifySchema(ctx, pool, specs)
+	if err != nil {
+		slog.Warn("schema check failed; continuing", "err", err)
+		return
+	}
+	if len(missing) > 0 {
+		slog.Error("models select columns the database does not have; refusing to serve",
+			"columns", missing,
+			"hint", "a migration has not been applied, or a db tag is misspelled")
+		os.Exit(1)
+	}
+
+	unmapped, err := store.VerifyUnmappedColumns(ctx, pool, specs)
+	if err != nil {
+		slog.Warn("unmapped-column check failed; continuing", "err", err)
+		return
+	}
+	var drift []string
+	for _, col := range unmapped {
+		if !unmappedColumnsAllowlist[col] {
+			drift = append(drift, col)
+		}
+	}
+	if len(drift) > 0 {
+		slog.Warn("database has columns no model reads or writes — that data is invisible to the API",
+			"columns", drift,
+			"hint", "add the field to the model, or list it in unmappedColumnsAllowlist with a reason")
+		return
+	}
+	slog.Info("schema matches the models in both directions")
 }

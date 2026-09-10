@@ -52,6 +52,11 @@ type Repository struct {
 	Tasks       *Collection[models.TaskItem, *models.TaskItem]
 	Deployment  *Collection[models.DeploymentDay, *models.DeploymentDay]
 
+	// The driver–vehicle authorisation matrix (FR-DRV-04, migration 0049).
+	VehicleCategories    *Collection[models.VehicleCategory, *models.VehicleCategory]
+	PermitClasses        *Collection[models.PermitClass, *models.PermitClass]
+	PermitAuthorisations *Collection[models.PermitAuthorisation, *models.PermitAuthorisation]
+
 	InspectionTemplates *Collection[models.InspectionTemplate, *models.InspectionTemplate]
 	Inspections         *Collection[models.VehicleInspection, *models.VehicleInspection]
 	PMSchedules         *Collection[models.PMSchedule, *models.PMSchedule]
@@ -86,6 +91,10 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 		Requests:    NewCollection[models.ServiceRequest, *models.ServiceRequest](pool, "service_requests"),
 		Tasks:       NewCollection[models.TaskItem, *models.TaskItem](pool, "task_items"),
 		Deployment:  NewCollection[models.DeploymentDay, *models.DeploymentDay](pool, "deployment_days"),
+
+		VehicleCategories:    NewCollection[models.VehicleCategory, *models.VehicleCategory](pool, "vehicle_categories"),
+		PermitClasses:        NewCollection[models.PermitClass, *models.PermitClass](pool, "permit_classes"),
+		PermitAuthorisations: NewCollection[models.PermitAuthorisation, *models.PermitAuthorisation](pool, "permit_authorisations"),
 
 		InspectionTemplates: NewCollection[models.InspectionTemplate, *models.InspectionTemplate](pool, "inspection_templates"),
 		Inspections:         NewCollection[models.VehicleInspection, *models.VehicleInspection](pool, "vehicle_inspections"),
@@ -374,6 +383,9 @@ func (r *Repository) SchemaSpecs() []ColumnSpec {
 		r.Requests.Spec(),
 		r.Tasks.Spec(),
 		r.Deployment.Spec(),
+		r.VehicleCategories.Spec(),
+		r.PermitClasses.Spec(),
+		r.PermitAuthorisations.Spec(),
 		r.InspectionTemplates.Spec(),
 		r.Inspections.Spec(),
 		r.PMSchedules.Spec(),

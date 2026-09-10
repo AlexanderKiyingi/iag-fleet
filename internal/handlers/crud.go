@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -23,12 +24,13 @@ import (
 var errDriverNotFound = errors.New("driver not found")
 
 // Resource binds a Collection to a route group with full CRUD.
-//   GET    /<base>          → list
-//   GET    /<base>/:id      → fetch
-//   POST   /<base>          → create (server-generates ID if missing)
-//   PUT    /<base>/:id      → full replace
-//   PATCH  /<base>/:id      → partial update via JSON-merge into stored value
-//   DELETE /<base>/:id      → remove
+//
+//	GET    /<base>          → list
+//	GET    /<base>/:id      → fetch
+//	POST   /<base>          → create (server-generates ID if missing)
+//	PUT    /<base>/:id      → full replace
+//	PATCH  /<base>/:id      → partial update via JSON-merge into stored value
+//	DELETE /<base>/:id      → remove
 type Resource[T any, PT store.IdentifiablePtr[T]] struct {
 	Repo       *store.Repository
 	Collection *store.Collection[T, PT]
@@ -37,6 +39,22 @@ type Resource[T any, PT store.IdentifiablePtr[T]] struct {
 	// IDPrefix is used when generating IDs for items posted without one.
 	IDPrefix string
 	Events   *events.Bus
+	// ServerOwnedFields names JSON fields a record write must not set, mapped to
+	// the endpoint that does own them.
+	//
+	// Several fields on these models are state-machine outputs, not form values:
+	// a maintenance work order becomes `completed` by POST /:id/complete, which
+	// is the call that draws the parts. A record PATCH that set `status` directly
+	// skipped the draw — and because completion refuses an already-completed row,
+	// the work order was then stranded: completed on screen, no stock moved, and
+	// no way to complete it properly.
+	//
+	// PATCH names its fields explicitly, so a named server-owned field is a
+	// mistake worth reporting: it 409s and says which endpoint to use. PUT
+	// replaces the whole object, so a client echoing back what it read is not
+	// making a claim about these fields — there they are quietly carried forward
+	// from the stored row instead.
+	ServerOwnedFields map[string]string
 	// Optional hooks for entity-specific validation and side effects.
 	BeforeCreate func(c *gin.Context, item *T) error
 	BeforeUpdate func(c *gin.Context, item *T) error
@@ -316,6 +334,14 @@ func (r *Resource[T, PT]) bulkPatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "patch: empty"})
 		return
 	}
+	if field, owner := rejectServerOwned(body.Patch, r.ServerOwnedFields); field != "" {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": fmt.Sprintf("%q is not editable on a %s record — use %s", field, r.Entity, owner),
+			"field": field,
+			"owner": owner,
+		})
+		return
+	}
 
 	ctx := c.Request.Context()
 	// Read the existing rows in ONE query, then merge in memory. Reading
@@ -469,6 +495,20 @@ func (r *Resource[T, PT]) replace(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
+	if len(r.ServerOwnedFields) > 0 {
+		// A PUT carries the whole object, so a client echoing back what it read
+		// is not asking to move these. Restore them from the stored row before
+		// validation, so BeforeUpdate sees what will actually be written.
+		stored, err := r.Collection.Get(c.Request.Context(), id)
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		if err := preserveServerOwned(&item, stored, r.ServerOwnedFields); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	if r.BeforeUpdate != nil {
 		if err := r.BeforeUpdate(c, &item); err != nil {
 			respondMutationError(c, err)
@@ -513,6 +553,14 @@ func (r *Resource[T, PT]) patch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empty body"})
 		return
 	}
+	if field, owner := rejectServerOwned(patchBytes, r.ServerOwnedFields); field != "" {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": fmt.Sprintf("%q is not editable on a %s record — use %s", field, r.Entity, owner),
+			"field": field,
+			"owner": owner,
+		})
+		return
+	}
 
 	merged, err := mergeJSON(existing, patchBytes)
 	if err != nil {
@@ -555,6 +603,82 @@ func (r *Resource[T, PT]) remove(c *gin.Context) {
 	}
 	r.Repo.LogBest(c.Request.Context(), "delete", r.Entity, id, "", currentUser(c, r.Repo))
 	c.Status(http.StatusNoContent)
+}
+
+// rejectServerOwned reports the first server-owned field named in a patch body,
+// or "" when the body names none. It works on the raw JSON because that is the
+// only place the caller's intent survives: after the merge, a field the caller
+// set and a field it inherited are indistinguishable.
+func rejectServerOwned(patch []byte, owned map[string]string) (field, owner string) {
+	if len(owned) == 0 {
+		return "", ""
+	}
+	var asMap map[string]json.RawMessage
+	if err := json.Unmarshal(patch, &asMap); err != nil {
+		// Not an object — the merge below rejects it with a better message.
+		return "", ""
+	}
+	// Iterate `owned` in a fixed order rather than `asMap`, so a body naming
+	// several reports the same one every time. Go map order is not stable, and an
+	// error message that changes between identical requests is its own bug.
+	for _, name := range sortedKeys(owned) {
+		if _, present := asMap[name]; present {
+			return name, owned[name]
+		}
+	}
+	return "", ""
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// preserveServerOwned copies the server-owned fields from the stored row over
+// whatever a PUT supplied, so a full replace cannot move them.
+func preserveServerOwned[T any](incoming *T, stored T, owned map[string]string) error {
+	if len(owned) == 0 {
+		return nil
+	}
+	storedBytes, err := json.Marshal(stored)
+	if err != nil {
+		return err
+	}
+	incomingBytes, err := json.Marshal(*incoming)
+	if err != nil {
+		return err
+	}
+	var storedMap, incomingMap map[string]json.RawMessage
+	if err := json.Unmarshal(storedBytes, &storedMap); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(incomingBytes, &incomingMap); err != nil {
+		return err
+	}
+	for name := range owned {
+		if value, ok := storedMap[name]; ok {
+			incomingMap[name] = value
+		} else {
+			// `omitempty` drops an unset field from the stored row entirely.
+			// Deleting it here restores the zero value on unmarshal, which is
+			// what "unset upstream" has to mean.
+			delete(incomingMap, name)
+		}
+	}
+	out, err := json.Marshal(incomingMap)
+	if err != nil {
+		return err
+	}
+	var fresh T
+	if err := json.Unmarshal(out, &fresh); err != nil {
+		return err
+	}
+	*incoming = fresh
+	return nil
 }
 
 func mergeJSON[T any](existing T, patch []byte) (T, error) {
@@ -736,7 +860,9 @@ func respondMutationError(c *gin.Context, err error) {
 		errors.Is(err, store.ErrNotFound) ||
 		errors.Is(err, errInvalidPMSchedule) || errors.Is(err, errInvalidMaintenanceStatus) ||
 		errors.Is(err, errInvalidComplianceDoc) || errors.Is(err, errInvalidComplianceExpiry) ||
-		errors.Is(err, errTripRefsRequired) {
+		errors.Is(err, errTripRefsRequired) ||
+		errors.Is(err, errAuthorisationRefsRequired) ||
+		errors.Is(err, errPermitNotAuthorised) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

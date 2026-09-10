@@ -22,6 +22,8 @@ var crudEntities = []string{
 	"safety_event", "compliance_item", "service_request",
 	"task_item", "deployment_day", "fuel_record", "fuel_request",
 	"inspection_template", "vehicle_inspection", "pm_schedule",
+	// The driver–vehicle authorisation matrix (FR-DRV-04).
+	"vehicle_category", "permit_class", "permit_authorisation",
 }
 
 var workflowPermissions = []PermissionDescriptor{
@@ -31,6 +33,7 @@ var workflowPermissions = []PermissionDescriptor{
 	{Name: "fleet.approve_assignment", Description: "Approve the vehicle/driver assignment"},
 	{Name: "fleet.approve_jmp", Description: "Approve a journey plan for dispatch"},
 	{Name: "fleet.approve_deployment", Description: "Approve deployment / release of a vehicle"},
+	{Name: "fleet.change_vehicle_lifecycle", Description: "Move a vehicle through its asset lifecycle (ground, hold for disposal, dispose)"},
 	{Name: "fleet.override_gate_order", Description: "Bypass status-ordering gates (out-of-order dispatch/JMP transitions; audit-logged)"},
 	{Name: "fleet.complete_toolbox_jmp", Description: "Complete toolbox talk on JMP"},
 	{Name: "fleet.complete_jmp", Description: "Mark an active JMP as completed"},

@@ -15,23 +15,25 @@ import (
 )
 
 var (
-	errDriverPermitInvalid   = errors.New("driver permit expired or missing")
-	errInvalidPMSchedule     = errors.New("invalid PM schedule")
-	errInvalidMaintenanceStatus = errors.New("invalid maintenance status")
-	errInvalidComplianceDoc  = errors.New("invalid compliance document")
-	errInvalidComplianceExpiry = errors.New("expiry must be today or in the future")
-	errDriverDoubleBooked     = errors.New("driver already has an overlapping journey in this period")
-	errVehicleDoubleBooked    = errors.New("vehicle already has an overlapping journey in this period")
-	errDriverAlreadyOnVehicle = errors.New("driver is already assigned to another vehicle")
-	errDriverEligibility      = errors.New("driver not eligible for dispatch")
-	errVehicleNotDispatchable = errors.New("vehicle not dispatchable")
-	errInvalidFuelRecord      = errors.New("invalid fuel record")
-	errTripRefsRequired       = errors.New("trip reference required")
-	errToolboxIncomplete      = errors.New("complete the toolbox talk before activating the journey")
-	errVehicleNotFound        = errors.New("vehicle not found")
-	errVehicleInUse           = errors.New("vehicle is referenced by a live journey")
-	errDriverInUse            = errors.New("driver is referenced by a live journey or vehicle")
-	errTyrePositionTaken      = errors.New("a tyre is already mounted at this position")
+	errDriverPermitInvalid       = errors.New("driver permit expired or missing")
+	errInvalidPMSchedule         = errors.New("invalid PM schedule")
+	errInvalidMaintenanceStatus  = errors.New("invalid maintenance status")
+	errInvalidComplianceDoc      = errors.New("invalid compliance document")
+	errInvalidComplianceExpiry   = errors.New("expiry must be today or in the future")
+	errDriverDoubleBooked        = errors.New("driver already has an overlapping journey in this period")
+	errVehicleDoubleBooked       = errors.New("vehicle already has an overlapping journey in this period")
+	errDriverAlreadyOnVehicle    = errors.New("driver is already assigned to another vehicle")
+	errDriverEligibility         = errors.New("driver not eligible for dispatch")
+	errVehicleNotDispatchable    = errors.New("vehicle not dispatchable")
+	errInvalidFuelRecord         = errors.New("invalid fuel record")
+	errTripRefsRequired          = errors.New("trip reference required")
+	errAuthorisationRefsRequired = errors.New("authorisation reference required")
+	errPermitNotAuthorised       = errors.New("driver not authorised for this vehicle category")
+	errToolboxIncomplete         = errors.New("complete the toolbox talk before activating the journey")
+	errVehicleNotFound           = errors.New("vehicle not found")
+	errVehicleInUse              = errors.New("vehicle is referenced by a live journey")
+	errDriverInUse               = errors.New("driver is referenced by a live journey or vehicle")
+	errTyrePositionTaken         = errors.New("a tyre is already mounted at this position")
 )
 
 func containsString(list []string, v string) bool {
@@ -274,6 +276,10 @@ func validateRequestAssignment(ctx context.Context, repo *store.Repository, req 
 	}
 	if req.AssignedDriverID != "" {
 		if err := validateDriverDispatch(ctx, repo, req.AssignedDriverID); err != nil {
+			return err
+		}
+		if err := validateDriverVehicleAuthorisation(
+			ctx, repo, req.AssignedDriverID, req.AssignedVehicleID); err != nil {
 			return err
 		}
 	}
@@ -555,4 +561,150 @@ func RequireTripRefs(_ *gin.Context, t *models.Trip) error {
 // the stored row: clearing either reference is the same null-violation.
 func RequireTripRefsOnUpdate(c *gin.Context, t *models.Trip) error {
 	return RequireTripRefs(c, t)
+}
+
+// ─── Driver–vehicle authorisation matrix (FR-DRV-04) ───────────────────────
+
+// RequireAuthorisationRefs rejects a matrix row missing either side of the pair.
+// Both columns are NOT NULL uuids, so without this the caller gets a raw
+// null-violation as a 502 instead of being told which field they left out.
+func RequireAuthorisationRefs(_ *gin.Context, a *models.PermitAuthorisation) error {
+	if strings.TrimSpace(a.PermitClassID) == "" {
+		return fmt.Errorf("%w: permitClassId — an authorisation needs a licence class", errAuthorisationRefsRequired)
+	}
+	if strings.TrimSpace(a.CategoryID) == "" {
+		return fmt.Errorf("%w: categoryId — an authorisation needs a vehicle category", errAuthorisationRefsRequired)
+	}
+	return nil
+}
+
+// validateDriverVehicleAuthorisation refuses a pairing the operator's matrix
+// contradicts.
+//
+// ── Why this is so careful about staying quiet ─────────────────────────────
+// The matrix is configuration, and configuration arrives half-finished. Every
+// existing deployment has an empty one, and drivers.permit_class is free text
+// that many rows leave blank. A rule that denied on missing data would ground
+// the fleet the day it shipped — which is a failure this service has already
+// had once, when 20 seeded drivers all carried the placeholder permit expiry
+// 2000-01-01, every one of them became undispatchable, and nothing on any screen
+// said so.
+//
+// So it denies only on a positive, complete contradiction: the matrix is
+// populated, the vehicle is classified, the driver's licence class resolves to a
+// class the operator has defined, somebody has already said something about this
+// category — and the pair is still absent. Anything less reads as "no opinion
+// yet" and is allowed.
+//
+// A retired (inactive) class or category counts as unconfigured for the same
+// reason: retiring one should switch its opinions off, not start refusing on it.
+func validateDriverVehicleAuthorisation(
+	ctx context.Context, repo *store.Repository, driverID, vehicleID string,
+) error {
+	if strings.TrimSpace(driverID) == "" || strings.TrimSpace(vehicleID) == "" {
+		return nil
+	}
+	veh, err := repo.Vehicles.Get(ctx, vehicleID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errVehicleNotFound
+		}
+		return err
+	}
+	return validateDriverVehicleAuthorisationFor(ctx, repo, driverID, veh)
+}
+
+// validateDriverVehicleAuthorisationFor is the same rule against a vehicle
+// already in hand.
+//
+// Two callers need it rather than the id form above. A vehicle being CREATED has
+// no stored row to fetch, so the id form would answer "vehicle not found" and
+// refuse the create outright. And a vehicle being UPDATED is being re-classified
+// by the very request under validation — the merged item carries the categoryId
+// the caller is setting, and the stored row still carries the old one, so
+// re-fetching would check the rule against the value being replaced.
+func validateDriverVehicleAuthorisationFor(
+	ctx context.Context, repo *store.Repository, driverID string, veh models.Vehicle,
+) error {
+	if strings.TrimSpace(driverID) == "" {
+		return nil
+	}
+	if strings.TrimSpace(veh.CategoryID) == "" {
+		return nil // Gate 1: unclassified vehicle.
+	}
+
+	auths, err := repo.PermitAuthorisations.List(ctx)
+	if err != nil {
+		return err
+	}
+	if len(auths) == 0 {
+		return nil // Gate 2: nobody has configured a matrix.
+	}
+
+	categories, err := repo.VehicleCategories.List(ctx)
+	if err != nil {
+		return err
+	}
+	category, ok := activeCategoryByID(categories, veh.CategoryID)
+	if !ok {
+		return nil // Gate 3: the category was retired or deleted.
+	}
+
+	drv, err := repo.Drivers.Get(ctx, driverID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errDriverNotFound
+		}
+		return err
+	}
+	classes, err := repo.PermitClasses.List(ctx)
+	if err != nil {
+		return err
+	}
+	class, ok := activeClassByCode(classes, drv.PermitClass)
+	if !ok {
+		return nil // Gate 4: the driver's licence class is not one the operator defined.
+	}
+
+	categoryMentioned := false
+	for _, a := range auths {
+		if a.CategoryID != category.ID {
+			continue
+		}
+		categoryMentioned = true
+		if a.PermitClassID == class.ID {
+			return nil // Authorised.
+		}
+	}
+	if !categoryMentioned {
+		return nil // Gate 5: nothing has been said about this category yet.
+	}
+
+	return fmt.Errorf("%w: a %s licence is not authorised for %s vehicles",
+		errPermitNotAuthorised, class.Code, category.Name)
+}
+
+func activeCategoryByID(all []models.VehicleCategory, id string) (models.VehicleCategory, bool) {
+	for _, c := range all {
+		if c.ID == id && c.Active {
+			return c, true
+		}
+	}
+	return models.VehicleCategory{}, false
+}
+
+// activeClassByCode matches drivers.permit_class, which is free text, against a
+// configured class. Case- and space-insensitive: "ce" and "CE " are the same
+// licence, and an operator typing either must not silently disable the rule.
+func activeClassByCode(all []models.PermitClass, permitClass string) (models.PermitClass, bool) {
+	want := strings.TrimSpace(permitClass)
+	if want == "" {
+		return models.PermitClass{}, false
+	}
+	for _, c := range all {
+		if c.Active && strings.EqualFold(strings.TrimSpace(c.Code), want) {
+			return c, true
+		}
+	}
+	return models.PermitClass{}, false
 }

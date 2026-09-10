@@ -99,19 +99,47 @@ func TestPlaceholdersStayContiguous(t *testing.T) {
 	}
 }
 
+// plainRow has no dbdefault tag on any column.
+//
+// This used to be asserted against models.Driver, on the grounds that drivers
+// tagged nothing. Migration 0050 gave every domain table created_at and
+// updated_at with database defaults, so there is no longer a real model without
+// one — and pinning the invariant to whichever model happens to lack a default
+// is what made this test fail for a reason that had nothing to do with the
+// invariant. A local type keeps it honest.
+type plainRow struct {
+	ID   string `db:"id"`
+	Name string `db:"name"`
+}
+
+func (p plainRow) GetID() string    { return p.ID }
+func (p *plainRow) SetID(id string) { p.ID = id }
+
 func TestCollectionWithoutDefaultsIsUnchanged(t *testing.T) {
-	// Drivers tag nothing, so they must keep the precomputed full-column path.
-	// This is what keeps the change from touching every other entity.
-	c := NewCollection[models.Driver, *models.Driver](nil, "drivers")
+	// A collection whose model tags no defaults keeps the precomputed
+	// full-column statement. That is what stops the per-row insert plan costing
+	// anything on entities that do not need it.
+	c := NewCollection[plainRow, *plainRow](nil, "plain_rows")
 	if c.anyDefaults {
-		t.Fatal("drivers has no dbdefault column and must not take the per-row path")
+		t.Fatal("plainRow has no dbdefault column and must not take the per-row path")
 	}
-	cols, params, _, err := c.insertPlan(models.Driver{ID: "DRV-1", Name: "x"})
+	cols, params, _, err := c.insertPlan(plainRow{ID: "P-1", Name: "x"})
 	if err != nil {
 		t.Fatalf("insertPlan: %v", err)
 	}
 	if cols != c.insertCols || params != c.insertParams {
 		t.Error("a collection without defaults must reuse the precomputed statement")
+	}
+}
+
+// TestEveryDomainCollectionTakesTheDefaultsPath is the other half: after 0050
+// every reflective collection carries defaulted timestamp columns, so all of
+// them go through insertPlan. If one stops, its created_at/updated_at are being
+// bound as empty strings — which a timestamptz column stores as NULL.
+func TestEveryDomainCollectionTakesTheDefaultsPath(t *testing.T) {
+	c := NewCollection[models.Driver, *models.Driver](nil, "drivers")
+	if !c.anyDefaults {
+		t.Fatal("drivers lost its dbdefault columns — created_at/updated_at will bind '' and write NULL")
 	}
 }
 

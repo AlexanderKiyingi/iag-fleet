@@ -49,6 +49,13 @@ type Driver struct {
 	// Pairs with PermitExpiry: an expiry alone cannot say whether a permit was
 	// renewed or first issued.
 	PermitIssueDate string `json:"permitIssueDate,omitempty" db:"permit_issue_date" dbcast:"date"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (d Driver) GetID() string    { return d.ID }
@@ -111,6 +118,49 @@ type Vehicle struct {
 	RegistrationExpiry string `json:"registrationExpiry,omitempty" db:"registration_expiry" dbcast:"date"`
 	NextServiceDate    string `json:"nextServiceDate,omitempty"    db:"next_service_date"   dbcast:"date"`
 	Notes              string `json:"notes,omitempty"              db:"notes"`
+
+	// --- Asset lifecycle, FR-VEH-06 (0048) ---
+	// Deliberately NOT Status: that is live operational state written by
+	// telemetry and read by dispatch validation. This is the asset's own
+	// disposition, and it moves only through POST /api/vehicles/:id/lifecycle —
+	// the record PATCH refuses to carry it (see vehicles.go).
+	LifecycleState  string `json:"lifecycleState"            db:"lifecycle_state"`
+	LifecycleReason string `json:"lifecycleReason,omitempty" db:"lifecycle_reason"`
+	LifecycleAt     string `json:"lifecycleAt,omitempty"     db:"lifecycle_at" dbcast:"timestamptz"`
+	LifecycleBy     string `json:"lifecycleBy,omitempty"     db:"lifecycle_by"`
+	DisposalMethod  string `json:"disposalMethod,omitempty"  db:"disposal_method"`
+	DisposalDate    string `json:"disposalDate,omitempty"    db:"disposal_date" dbcast:"date"`
+	// Pointer because 0 proceeds is a real outcome (scrapped, donated) and has to
+	// stay distinguishable from "no disposal recorded".
+	DisposalProceeds *float64 `json:"disposalProceeds,omitempty" db:"disposal_proceeds"`
+	DisposalBuyer    string   `json:"disposalBuyer,omitempty"    db:"disposal_buyer"`
+
+	// CategoryID is the dispatch-rule classification (FR-DRV-04), separate from
+	// the free-text Type above which in practice carries brand names. References
+	// vehicle_categories; see 0049 and the matrix in domain_validate.go.
+	CategoryID string `json:"categoryId,omitempty" db:"category_id" dbcast:"uuid"`
+
+	// SpeedLimitKmh is the per-vehicle overspeed threshold from migration 0036.
+	//
+	// The detector in fleet-iot reads this column directly
+	// (iot/overspeed.go: loadOverspeedContext), and nothing could ever WRITE it:
+	// there was no field here, so no API and no form, so it was NULL on every
+	// row and every vehicle fell back to the global FLEET_SPEED_LIMIT_KMH. The
+	// point of 0036 was a limit that is "per-vehicle, changeable without
+	// touching hardware", and half of that was missing.
+	//
+	// A pointer because the column has three meanings and they are all real:
+	// NULL falls back to the global limit, 0 disables monitoring for this
+	// vehicle, and a value is the limit. Collapsing NULL and 0 would silently
+	// switch monitoring off for every unconfigured vehicle.
+	SpeedLimitKmh *float64 `json:"speedLimitKmh,omitempty" db:"speed_limit_kmh"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 // VehicleDevices is the JSONB-backed device list on vehicles.devices.
@@ -179,7 +229,15 @@ type JMP struct {
 	// Dispatch and mileage are independent gates, so each keeps its own reason.
 	DispatchRejectReason string `json:"dispatchRejectReason,omitempty" db:"dispatch_reject_reason"`
 	MileageRejectReason  string `json:"mileageRejectReason,omitempty"  db:"mileage_reject_reason"`
-
+	// Notes is the journey-plan free text. Migration 0045 added jmps.notes
+	// specifically to stop the browser discarding it, but the field was never
+	// added here — and the column list is derived from these tags, so the column
+	// was neither selected nor written and notes went on being lost.
+	// TestModelColumnsMatchSchema exists so that cannot recur.
+	Notes string `json:"notes,omitempty" db:"notes"`
+	// Set by the touch_row trigger on every write (0050). CreatedAt above
+	// predates it and keeps its real values.
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (j JMP) GetID() string    { return j.ID }
@@ -217,6 +275,9 @@ type Cargo struct {
 	Remarks          string            `json:"remarks,omitempty"           db:"remarks"`
 	CreatedAt        string            `json:"createdAt"                   db:"created_at"        dbcast:"timestamptz" dbdefault:"true"`
 	StageHistory     CargoStageHistory `json:"stageHistory"                db:"stage_history"`
+	// Set by the touch_row trigger on every write (0050). CreatedAt above
+	// predates it and keeps its real values.
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (c Cargo) GetID() string    { return c.ID }
@@ -231,6 +292,13 @@ type CargoDoc struct {
 	Expiry  string `json:"expiry,omitempty"  db:"expiry"  dbcast:"date"`
 	Issuer  string `json:"issuer,omitempty"  db:"issuer"`
 	Notes   string `json:"notes,omitempty"   db:"notes"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (c CargoDoc) GetID() string    { return c.ID }
@@ -267,6 +335,13 @@ type FuelRecord struct {
 	AnomalyStatus  string         `json:"anomalyStatus,omitempty"  db:"anomaly_status"`
 	AnomalyHistory AnomalyHistory `json:"anomalyHistory"           db:"anomaly_history"`
 	FuelEventID    *int64         `json:"fuelEventId,omitempty"    db:"fuel_event_id"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (f FuelRecord) GetID() string    { return f.ID }
@@ -318,6 +393,13 @@ type MaintenanceItem struct {
 	// the work came to; collapsing them loses the variance. (0044)
 	EstCost  *float64 `json:"estCost,omitempty"  db:"est_cost"`
 	NeededBy string   `json:"neededBy,omitempty" db:"needed_by" dbcast:"date"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (m MaintenanceItem) GetID() string    { return m.ID }
@@ -359,6 +441,13 @@ type Part struct {
 	// empty means this part is still showing legacy local stock.
 	WarehouseItemID   string `json:"warehouseItemId,omitempty"   db:"warehouse_item_id"`
 	WarehouseSyncedAt string `json:"warehouseSyncedAt,omitempty" db:"warehouse_synced_at" dbcast:"timestamptz"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (p Part) GetID() string    { return p.ID }
@@ -376,6 +465,13 @@ type Tyre struct {
 	TreadDepthMm   float64 `json:"treadDepthMm"     db:"tread_depth_mm"`
 	TreadInitialMm float64 `json:"treadInitialMm"   db:"tread_initial_mm"`
 	Status         string  `json:"status"           db:"status"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (t Tyre) GetID() string    { return t.ID }
@@ -406,6 +502,13 @@ type Trip struct {
 	// with. Pointers so "not recorded" stays distinct from a genuine 0.
 	OdometerStart *float64 `json:"odometerStart,omitempty" db:"odometer_start"`
 	OdometerEnd   *float64 `json:"odometerEnd,omitempty"   db:"odometer_end"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (t Trip) GetID() string    { return t.ID }
@@ -430,6 +533,13 @@ type SafetyEvent struct {
 	LinkedWoID    string        `json:"linkedWoId,omitempty" db:"linked_wo_id" dbcast:"uuid"`
 	Authorities   string        `json:"authorities,omitempty" db:"authorities"`
 	StatusHistory StatusHistory `json:"statusHistory"       db:"status_history"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (s SafetyEvent) GetID() string    { return s.ID }
@@ -464,6 +574,13 @@ type ComplianceItem struct {
 	Notes          string             `json:"notes,omitempty"      db:"notes"`
 	RenewalCostUgx float64            `json:"renewalCostUgx,omitempty" db:"renewal_cost_ugx"`
 	RenewalHistory ComplianceRenewals `json:"renewalHistory"       db:"renewal_history"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (c ComplianceItem) GetID() string    { return c.ID }
@@ -505,6 +622,13 @@ type ServiceRequest struct {
 	DeployedBy           string `json:"deployedBy,omitempty"           db:"deployed_by"`
 	DeployedAt           string `json:"deployedAt,omitempty"           db:"deployed_at" dbcast:"timestamptz"`
 	DeploymentEntryID    string `json:"deploymentEntryId,omitempty"    db:"deployment_entry_id" dbcast:"uuid"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (s ServiceRequest) GetID() string    { return s.ID }
@@ -548,6 +672,13 @@ type FuelRequest struct {
 	ProcurementStatus        string `json:"procurementStatus,omitempty"        db:"-"`
 
 	NeededBy string `json:"neededBy,omitempty" db:"needed_by" dbcast:"date"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (f FuelRequest) GetID() string    { return f.ID }
@@ -573,6 +704,9 @@ type TaskItem struct {
 	Source       string    `json:"source"              db:"source"`
 	SourceID     string    `json:"sourceId,omitempty"  db:"source_id"`
 	Links        TaskLinks `json:"links,omitempty"     db:"links"`
+	// Set by the touch_row trigger on every write (0050). CreatedAt above
+	// predates it and keeps its real values.
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (t TaskItem) GetID() string    { return t.ID }
@@ -601,6 +735,13 @@ type DeploymentDay struct {
 	CompiledBy string            `json:"compiledBy"  db:"compiled_by"`
 	Notes      string            `json:"notes"       db:"notes"`
 	Entries    DeploymentEntries `json:"entries"     db:"entries"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (d DeploymentDay) GetID() string    { return d.ID }
@@ -645,6 +786,9 @@ type InspectionTemplate struct {
 	// Optional; the DVIR UI reads it to label/filter templates. Appended last
 	// to match the column added by migration 0028.
 	VehicleType string `json:"vehicleType,omitempty" db:"vehicle_type"`
+	// Set by the touch_row trigger on every write (0050). CreatedAt above
+	// predates it and keeps its real values.
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (t InspectionTemplate) GetID() string    { return t.ID }
@@ -682,6 +826,13 @@ type VehicleInspection struct {
 	SubmittedBy   string            `json:"submittedBy,omitempty"   db:"submitted_by"`
 	MaintenanceID string            `json:"maintenanceId,omitempty" db:"maintenance_id" dbcast:"uuid"`
 	Notes         string            `json:"notes,omitempty"         db:"notes"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (v VehicleInspection) GetID() string    { return v.ID }
@@ -705,6 +856,13 @@ type PMSchedule struct {
 	AutoCreateWO       bool     `json:"autoCreateWo"               db:"auto_create_wo"`
 	Active             bool     `json:"active"                     db:"active"`
 	Notes              string   `json:"notes,omitempty"            db:"notes"`
+	// Record timestamps (0050). Written by the touch_row trigger, which fires
+	// after the statement's SET list and therefore wins over whatever the
+	// reflective UPDATE binds — created_at is immutable, updated_at always
+	// moves. dbdefault so an unset value on INSERT takes the column DEFAULT
+	// rather than binding '' into a timestamptz, which writes NULL.
+	CreatedAt string `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt string `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
 }
 
 func (p PMSchedule) GetID() string    { return p.ID }

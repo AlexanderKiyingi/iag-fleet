@@ -17,6 +17,18 @@ func NewVehicleResource(repo *store.Repository, bus *events.Bus) *Resource[model
 		Entity:     "vehicle",
 		IDPrefix:   "VEH",
 		Events:     bus,
+		// The lifecycle moves through its own endpoint so the state machine, the
+		// reason and the attribution are unavoidable rather than advisory.
+		ServerOwnedFields: map[string]string{
+			"lifecycleState":   "POST /api/vehicles/:id/lifecycle",
+			"lifecycleReason":  "POST /api/vehicles/:id/lifecycle",
+			"lifecycleAt":      "POST /api/vehicles/:id/lifecycle",
+			"lifecycleBy":      "POST /api/vehicles/:id/lifecycle",
+			"disposalMethod":   "POST /api/vehicles/:id/lifecycle",
+			"disposalDate":     "POST /api/vehicles/:id/lifecycle",
+			"disposalProceeds": "POST /api/vehicles/:id/lifecycle",
+			"disposalBuyer":    "POST /api/vehicles/:id/lifecycle",
+		},
 	}
 	r.BeforeCreate = func(c *gin.Context, item *models.Vehicle) error {
 		return validateVehicleDriver(c.Request.Context(), repo, item)
@@ -56,6 +68,10 @@ func validateVehicleDriver(ctx context.Context, repo *store.Repository, v *model
 		return nil
 	}
 	if err := validateDriverDispatch(ctx, repo, v.DriverID); err != nil {
+		return err
+	}
+	// The operator's licence-class matrix, when they have configured one.
+	if err := validateDriverVehicleAuthorisationFor(ctx, repo, v.DriverID, *v); err != nil {
 		return err
 	}
 	// One driver per vehicle: the driver must not already be the assigned driver

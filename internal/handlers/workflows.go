@@ -86,32 +86,80 @@ func (w *Workflows) Register(rg *gin.RouterGroup) {
 
 // ───────────────────────────── JMPs ─────────────────────────────
 
+type completeToolboxBody struct {
+	// Items is the service's own shape, for a caller that speaks it directly.
+	Items *models.ToolboxItems `json:"items"`
+	// Checks is the list of items the driver actually confirmed, using the ids
+	// the toolbox UI is built from. Authoritative when present: an item absent
+	// from the list was not confirmed.
+	Checks []string `json:"checks"`
+	// ToolboxChecks is the same list comma-joined, which is what the app's
+	// standalone path stores on the record. Accepted so one client does not have
+	// to send two shapes to two modes.
+	ToolboxChecks string `json:"toolboxChecks"`
+	Facilitator   string `json:"facilitator"`
+}
+
+// completeToolbox records the pre-dispatch toolbox talk.
+//
+// This used to set all eight items to true unconditionally, on the stated
+// assumption that "callers should generally have already toggled them via PATCH
+// first". No caller did: the Next.js adapter never mapped `toolbox` at all. So
+// the UI collected eight individual driver confirmations, sent none of them, and
+// the service recorded all eight as confirmed.
+//
+// A toolbox talk is a safety attestation. Writing eight confirmations nobody
+// made is worse than refusing the request, so the submitted checks are what gets
+// stored and an incomplete set is rejected rather than completed on the caller's
+// behalf. A body naming no checks at all falls back to the stored items, which
+// is the only path that can still complete without new evidence — and it only
+// completes if those are already complete.
 func (w *Workflows) completeToolbox(c *gin.Context) {
 	id := c.Param("id")
 	ctx := c.Request.Context()
+
+	var body completeToolboxBody
+	if err := bindOptionalJSON(c, &body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var incomplete bool
+	var missing []string
 	updated, err := w.Repo.JMPs.Update(ctx, id, func(j *models.JMP) {
-		// Force every toolbox item to true to satisfy the "all checked" rule;
-		// callers should generally have already toggled them via PATCH first,
-		// but this keeps the workflow idempotent.
-		t := true
-		j.Toolbox.Items = models.ToolboxItems{
-			NoDrunkDriving:    &t,
-			SpeedLimits:       &t,
-			CargoInspection:   &t,
-			Communication:     &t,
-			FatigueManagement: &t,
-			IncidentContacts:  &t,
-			RouteReviewed:     &t,
-			ParkingConfirmed:  &t,
+		items := j.Toolbox.Items
+		if body.Items != nil {
+			items = *body.Items
 		}
+		if checks := toolboxCheckList(body); len(checks) > 0 {
+			items = toolboxItemsFromChecks(checks)
+		}
+
+		missing = missingToolboxItems(items)
+		if len(missing) > 0 {
+			incomplete = true
+			return
+		}
+
+		j.Toolbox.Items = items
 		j.Toolbox.Completed = true
 		j.Toolbox.CompletedAt = nowISO()
+		if strings.TrimSpace(body.Facilitator) != "" {
+			j.Toolbox.Facilitator = strings.TrimSpace(body.Facilitator)
+		}
 		if j.Status == "draft" || j.Status == "pending-toolbox" {
 			j.Status = "active"
 		}
 	})
 	if err != nil {
 		respondError(c, err)
+		return
+	}
+	if incomplete {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":   errToolboxIncomplete.Error(),
+			"missing": missing,
+		})
 		return
 	}
 	w.Repo.LogBest(ctx, "toolbox-complete", "jmp", id, "", currentUser(c, w.Repo))
@@ -414,6 +462,10 @@ func (w *Workflows) assignRequest(c *gin.Context) {
 		respondMutationError(c, err)
 		return
 	}
+	if err := validateDriverVehicleAuthorisationFor(ctx, w.Repo, body.DriverID, veh); err != nil {
+		respondMutationError(c, err)
+		return
+	}
 	// Reject assigning a driver/vehicle already committed to an overlapping
 	// journey in the request's window (early guard; JMP creation enforces it too).
 	req, err := w.Repo.Requests.Get(ctx, id)
@@ -537,6 +589,11 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 		return
 	}
 	if err := validateDriverDispatch(ctx, w.Repo, req.AssignedDriverID); err != nil {
+		respondMutationError(c, err)
+		return
+	}
+	if err := validateDriverVehicleAuthorisation(
+		ctx, w.Repo, req.AssignedDriverID, req.AssignedVehicleID); err != nil {
 		respondMutationError(c, err)
 		return
 	}
@@ -1733,4 +1790,112 @@ func (w *Workflows) emitFleetTx(ctx context.Context, tx pgx.Tx, eventType string
 		return nil
 	}
 	return w.Events.PublishFleetTx(ctx, tx, eventType, events.FleetEventData(fields), key, key)
+}
+
+// ─── Toolbox talk helpers ──────────────────────────────────────────────────
+
+// toolboxCheckAliases maps the ids the toolbox UI is built from onto the fields
+// of models.ToolboxItems. Four of the eight differ between the two, which is
+// exactly the kind of mismatch that turns into a silently-unrecorded safety
+// check, so the mapping is written out rather than derived.
+var toolboxCheckAliases = map[string]string{
+	"drunkdriving":      "NoDrunkDriving",
+	"nodrunkdriving":    "NoDrunkDriving",
+	"speedlimits":       "SpeedLimits",
+	"cargoinspection":   "CargoInspection",
+	"commsprotocol":     "Communication",
+	"communication":     "Communication",
+	"fatigue":           "FatigueManagement",
+	"fatiguemanagement": "FatigueManagement",
+	"incidentcontacts":  "IncidentContacts",
+	"routereviewed":     "RouteReviewed",
+	"parking":           "ParkingConfirmed",
+	"parkingconfirmed":  "ParkingConfirmed",
+}
+
+// toolboxCheckList reads the confirmed ids from either shape the client sends.
+func toolboxCheckList(body completeToolboxBody) []string {
+	if len(body.Checks) > 0 {
+		return body.Checks
+	}
+	if strings.TrimSpace(body.ToolboxChecks) == "" {
+		return nil
+	}
+	parts := strings.Split(body.ToolboxChecks, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// toolboxItemsFromChecks builds the item set from the confirmed ids. Anything
+// not named is left false: the list is what the driver ticked, so an absent item
+// is an unanswered one, not an unmentioned one.
+func toolboxItemsFromChecks(checks []string) models.ToolboxItems {
+	yes := true
+	var items models.ToolboxItems
+	for _, raw := range checks {
+		switch toolboxCheckAliases[strings.ToLower(strings.TrimSpace(raw))] {
+		case "NoDrunkDriving":
+			items.NoDrunkDriving = &yes
+		case "SpeedLimits":
+			items.SpeedLimits = &yes
+		case "CargoInspection":
+			items.CargoInspection = &yes
+		case "Communication":
+			items.Communication = &yes
+		case "FatigueManagement":
+			items.FatigueManagement = &yes
+		case "IncidentContacts":
+			items.IncidentContacts = &yes
+		case "RouteReviewed":
+			items.RouteReviewed = &yes
+		case "ParkingConfirmed":
+			items.ParkingConfirmed = &yes
+		}
+	}
+	return items
+}
+
+// missingToolboxItems names the checks that are not confirmed, in the order the
+// UI lists them, so the refusal tells the caller what is outstanding.
+func missingToolboxItems(items models.ToolboxItems) []string {
+	confirmed := func(v *bool) bool { return v != nil && *v }
+	ordered := []struct {
+		id string
+		ok bool
+	}{
+		{"drunkDriving", confirmed(items.NoDrunkDriving)},
+		{"speedLimits", confirmed(items.SpeedLimits)},
+		{"cargoInspection", confirmed(items.CargoInspection)},
+		{"commsProtocol", confirmed(items.Communication)},
+		{"fatigue", confirmed(items.FatigueManagement)},
+		{"incidentContacts", confirmed(items.IncidentContacts)},
+		{"routeReviewed", confirmed(items.RouteReviewed)},
+		{"parking", confirmed(items.ParkingConfirmed)},
+	}
+	var missing []string
+	for _, item := range ordered {
+		if !item.ok {
+			missing = append(missing, item.id)
+		}
+	}
+	return missing
+}
+
+// bindOptionalJSON binds a JSON body that may be absent or empty. The workflow
+// verbs are POSTs with no required payload and several callers send nothing at
+// all; ShouldBindJSON treats an empty body as an error.
+func bindOptionalJSON(c *gin.Context, out any) error {
+	raw, err := c.GetRawData()
+	if err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
 }
