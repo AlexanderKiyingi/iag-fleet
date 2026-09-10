@@ -100,7 +100,7 @@ func seedActiveJMP(t *testing.T, pool *pgxpool.Pool, driverID, vehicleID string)
 		INSERT INTO jmps (id, vehicle_id, driver_id, purpose, start_date, expected_arrival,
 			expected_return, mileage_status, status, created_by)
 		VALUES ($1, $2, $3, 'test', $4, $5, $5, 'Pending', 'active', 'test')`,
-		"JMP-"+driverID, vehicleID, driverID, start, end)
+		testID("JMP-"+driverID), vehicleID, driverID, start, end)
 	if err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}

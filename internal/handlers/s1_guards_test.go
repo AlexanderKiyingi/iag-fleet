@@ -85,6 +85,11 @@ func TestIntegration_RequestAssignPatchBlocked(t *testing.T) {
 	if _, err := repo.JMPs.Add(ctx, integrationJMP(testID("JMP-RQ"), testID("VEH-OTHER"), testID("DRV-RQ"), "2031-03-01", "2031-03-05", "active")); err != nil {
 		t.Fatalf("seed jmp: %v", err)
 	}
+	// The PATCH below assigns this vehicle. Without the row the handler answers
+	// "vehicle not found" and never reaches the driver-overlap guard under test.
+	if _, err := repo.Vehicles.Add(ctx, integrationVehicle(testID("VEH-RQ"), "RQ-1")); err != nil {
+		t.Fatalf("seed vehicle: %v", err)
+	}
 	if _, err := repo.Requests.Add(ctx, models.ServiceRequest{
 		ID: testID("REQ-RQ"), RequesterName: "R", RequesterDept: "Ops", Purpose: "x",
 		Destination: "Y", StartDate: "2031-03-03", EndDate: "2031-03-04", Status: "approved",

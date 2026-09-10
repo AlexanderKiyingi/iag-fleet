@@ -44,7 +44,7 @@ func seedAssignedRequest(t *testing.T, repo *store.Repository, id string, approv
 	r := models.ServiceRequest{
 		ID: id, RequesterName: "R", RequesterDept: "Ops", Purpose: "x",
 		Destination: "Y", StartDate: "2031-05-01", EndDate: "2031-05-02", Status: "assigned",
-		AssignedVehicleID: "VEH-" + id, AssignedDriverID: "DRV-" + id,
+		AssignedVehicleID: testID("VEH-" + id), AssignedDriverID: testID("DRV-" + id),
 		// NOT NULL with a DEFAULT, but the generic insert binds the column
 		// explicitly, so the default never applies.
 		SubmittedAt: "2031-04-29T08:00:00Z",

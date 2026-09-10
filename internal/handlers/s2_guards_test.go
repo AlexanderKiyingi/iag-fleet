@@ -121,20 +121,20 @@ func TestIntegration_TyrePositionUnique(t *testing.T) {
 		// tyres.mounted_date is NOT NULL (0001_initial).
 		return models.Tyre{ID: id, VehicleID: testID("VEH-TYR"), Position: pos, Status: status, Brand: "B", MountedDate: "2031-01-15"}
 	}
-	if w := postJSONTo(tr.create, mk("TR1", "FL", "good")); w.Code != http.StatusCreated {
+	if w := postJSONTo(tr.create, mk(testID("TR1"), "FL", "good")); w.Code != http.StatusCreated {
 		t.Fatalf("first FL tyre: status %d; %s", w.Code, w.Body.String())
 	}
-	if w := postJSONTo(tr.create, mk("TR2", "FL", "good")); w.Code != http.StatusConflict {
+	if w := postJSONTo(tr.create, mk(testID("TR2"), "FL", "good")); w.Code != http.StatusConflict {
 		t.Fatalf("second FL tyre: status %d, want 409; %s", w.Code, w.Body.String())
 	}
-	if w := postJSONTo(tr.create, mk("TR3", "FR", "good")); w.Code != http.StatusCreated {
+	if w := postJSONTo(tr.create, mk(testID("TR3"), "FR", "good")); w.Code != http.StatusCreated {
 		t.Fatalf("FR tyre: status %d, want 201; %s", w.Code, w.Body.String())
 	}
 	// A retired tyre at a position doesn't block a fresh mount there.
-	if _, err := repo.Tyres.Add(ctx, mk("TR4", "RL", "replaced")); err != nil {
+	if _, err := repo.Tyres.Add(ctx, mk(testID("TR4"), "RL", "replaced")); err != nil {
 		t.Fatalf("seed retired tyre: %v", err)
 	}
-	if w := postJSONTo(tr.create, mk("TR5", "RL", "good")); w.Code != http.StatusCreated {
+	if w := postJSONTo(tr.create, mk(testID("TR5"), "RL", "good")); w.Code != http.StatusCreated {
 		t.Fatalf("RL tyre over retired: status %d, want 201; %s", w.Code, w.Body.String())
 	}
 	// Unknown vehicle is rejected.
