@@ -36,7 +36,7 @@ FROM base AS fleet-iot-clone
 # edge/Fleet_IoT and so builds green against the working tree, which is exactly
 # how a stale pin gets missed locally. If you changed fleet and fleet-iot
 # together, bump this in the same commit.
-ARG FLEET_IOT_REF=d6178d1
+ARG FLEET_IOT_REF=6b7ef4e
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \

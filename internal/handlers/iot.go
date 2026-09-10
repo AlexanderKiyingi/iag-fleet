@@ -74,6 +74,11 @@ func (h *IoT) Register(rg *gin.RouterGroup) {
 	// Operator-facing ingestion contract (URLs + limits + sample JSON) for relays and scripts.
 	rg.GET("/iot/ingestion", auth.RequirePerm("manage_iot_device"), h.requireStore, h.ingestionGuide)
 
+	// The hardware catalogue the operator UI builds its type/brand/model
+	// selects from. No store required — it is a property of the build, not of
+	// the data — so a deployment without telemetry can still render the form.
+	rg.GET("/iot/catalog", auth.RequirePerm("manage_iot_device"), h.deviceCatalog)
+
 	// Driver companion-app self-report: the driver's phone posts its GPS while on
 	// an active journey. Authenticated by the driver's platform JWT (no device
 	// key); the vehicle is resolved from the driver's active JMP, not the body.
@@ -109,6 +114,10 @@ type createDeviceBody struct {
 	// UI already sent it, and this struct silently dropped it. So it stayed
 	// empty on every device and both features were unreachable.
 	Model string `json:"model"`
+	// DeviceType and Brand (migration 0051). Validated against the hardware
+	// catalogue so a brand is a selection, not a spelling — see iot_catalog.go.
+	DeviceType string `json:"deviceType"`
+	Brand      string `json:"brand"`
 	// Fuel sensor mapping (migration 0047). Omitted leaves the column defaults,
 	// which are the Teltonika CAN-percent behaviour every device had before.
 	FuelIOID   *uint16  `json:"fuelIoId"`
@@ -146,6 +155,12 @@ func (h *IoT) createDevice(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// Reject hardware the catalogue does not know HERE, not when a frame
+	// arrives at 3am and no decoder matches. The error names the alternatives.
+	if err := validateDeviceHardware(body.DeviceType, body.Brand, body.Model); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	created, err := h.Store.CreateDevice(c.Request.Context(), iot.CreateDeviceInput{
 		Serial:     body.Serial,
@@ -153,6 +168,8 @@ func (h *IoT) createDevice(c *gin.Context) {
 		VehicleID:  body.VehicleID,
 		IssueKey:   body.IssueKey,
 		Model:      body.Model,
+		DeviceType: body.DeviceType,
+		Brand:      body.Brand,
 		FuelIOID:   body.FuelIOID,
 		FuelScale:  body.FuelScale,
 		FuelOffset: body.FuelOffset,
@@ -169,6 +186,13 @@ func (h *IoT) createDevice(c *gin.Context) {
 type listDeviceItem struct {
 	iot.Device
 	VehiclePlate string `json:"vehiclePlate,omitempty"`
+	// ExpectedProtocol is what the chosen brand/model SHOULD speak, from the
+	// catalogue. `Protocol` on the embedded device is what it was last heard
+	// speaking. The two disagreeing means the unit is dialling the wrong
+	// gateway — the failure that otherwise shows up as "registered but never
+	// reports" and is only diagnosable from gateway logs.
+	ExpectedProtocol string `json:"expectedProtocol,omitempty"`
+	ProtocolMismatch bool   `json:"protocolMismatch,omitempty"`
 }
 
 func (h *IoT) listDevices(c *gin.Context) {
@@ -193,7 +217,15 @@ func (h *IoT) listDevices(c *gin.Context) {
 
 	out := make([]listDeviceItem, 0, len(ds))
 	for _, d := range ds {
-		out = append(out, listDeviceItem{Device: d, VehiclePlate: plateBy[d.VehicleID]})
+		expected := catalogProtocol(d.Brand, d.Model)
+		out = append(out, listDeviceItem{
+			Device:           d,
+			VehiclePlate:     plateBy[d.VehicleID],
+			ExpectedProtocol: expected,
+			// Only a device that has actually spoken can contradict the
+			// catalogue; an empty Protocol means "not seen yet", not "wrong".
+			ProtocolMismatch: expected != "" && d.Protocol != "" && expected != d.Protocol,
+		})
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -219,7 +251,11 @@ type updateDeviceBody struct {
 	// Both of these are edits by nature: the model is usually read off the unit
 	// during fitment, and a probe's scale is measured against a known tank level
 	// once the sensor is in the vehicle — neither is known at registration.
-	Model      *string  `json:"model"`
+	Model *string `json:"model"`
+	// Type and brand are correctable for the same reason: a row is often
+	// created from a packing list and the hardware identified at fitment.
+	DeviceType *string  `json:"deviceType"`
+	Brand      *string  `json:"brand"`
 	FuelIOID   *uint16  `json:"fuelIoId"`
 	FuelScale  *float64 `json:"fuelScale"`
 	FuelOffset *float64 `json:"fuelOffset"`
@@ -250,11 +286,19 @@ func (h *IoT) updateDevice(c *gin.Context) {
 		return
 	}
 
+	// A PATCH may send only one of the three, so the catalogue is checked
+	// against what the row will BE once merged, not against what was sent.
+	if !h.hardwarePatchIsValid(c, id, body.DeviceType, body.Brand, body.Model) {
+		return
+	}
+
 	d, err := h.Store.UpdateDevice(c.Request.Context(), id, iot.UpdateDeviceInput{
 		Label:      body.Label,
 		VehicleID:  body.VehicleID,
 		IsActive:   body.IsActive,
 		Model:      body.Model,
+		DeviceType: body.DeviceType,
+		Brand:      body.Brand,
 		FuelIOID:   body.FuelIOID,
 		FuelScale:  body.FuelScale,
 		FuelOffset: body.FuelOffset,
@@ -341,16 +385,10 @@ func (h *IoT) ingestionGuide(c *gin.Context) {
 				"raw": map[string]any{"note": "optional opaque JSON from device"},
 			}},
 		}),
-		// The TCP listeners have no equivalent variable to report: a tracker is
-		// programmed with a host and port over SMS, so the address lives on the
-		// device, not here. Reachability still has to be arranged — see
-		// docs/ST-901-onboarding.md in Fleet_IoT.
-		"tcp": gin.H{
-			"teltonika":  "Codec 8 / 8E — Fleet_IoT gateway, default :5027",
-			"sinotrack":  "SinoTrack / HQ protocol — Fleet_IoT sinotrack, default :5013",
-			"identifier": "IMEI must match iot_devices.serial; no bearer token on wire.",
-			"note":       "Both need a publicly reachable host:port before a device can dial in.",
-		},
+		// The TCP listeners now report a real address too — see
+		// iot_tcp_endpoint.go for why a port on its own was not one, and
+		// docs/ST-901-onboarding.md in Fleet_IoT for the wider runbook.
+		"tcp": tcpIngestionBlock(),
 	})
 }
 
