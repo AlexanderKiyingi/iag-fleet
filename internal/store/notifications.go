@@ -2,12 +2,10 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"strconv"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -228,10 +226,21 @@ func LegacyUserIDString(id int64) string {
 	return strconv.FormatInt(id, 10)
 }
 
+// newNotificationID mints the primary key for a notification row.
+//
+// It used to return "NTF-<16 hex chars>". Migration 0043 retyped
+// notifications.id to uuid, and this generator was not changed with it, so
+// every insert failed on its own primary key:
+//
+//	ERROR: invalid input syntax for type uuid: "NTF-08b711aa254b7597" (22P02)
+//
+// Upsert logs that at WARN and carries on, so nothing crashed and nothing
+// paged — in-app notifications simply stopped being delivered, for every user
+// and every kind, from the moment 0043 landed.
+//
+// The column also carries DEFAULT gen_random_uuid() from 0043, but the insert
+// binds id explicitly so the default never applies. Minting here keeps the id
+// available to the caller without a round trip.
 func newNotificationID() string {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "NTF-" + fmt.Sprintf("%016x", uint64(0))
-	}
-	return "NTF-" + hex.EncodeToString(b[:])
+	return uuid.NewString()
 }
