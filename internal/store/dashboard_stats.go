@@ -127,8 +127,13 @@ func (r *Repository) DashboardAlerts(ctx context.Context) (alerts []DashboardAle
 			q: `
                 SELECT CASE WHEN ci.status = 'expiring' THEN 'warn' ELSE 'crit' END,
                        ci.doc_type || ' ' || CASE WHEN ci.status = 'expiring' THEN 'expiring' ELSE ci.status END,
+                       -- driver_id and vehicle_id are cast to text before NULLIF.
+                       -- Migration 0043 retyped both to uuid on compliance_items,
+                       -- and NULLIF(uuid, '') has to coerce '' to uuid, which
+                       -- fails the whole statement with 22P02 — taking
+                       -- GET /api/dashboard/summary down with it.
                        COALESCE(NULLIF(d.name, ''), NULLIF(v.plate, ''),
-                                NULLIF(ci.driver_id, ''), NULLIF(ci.vehicle_id, ''), '—'),
+                                NULLIF(ci.driver_id::text, ''), NULLIF(ci.vehicle_id::text, ''), '—'),
                        COALESCE(to_char(ci.expiry, 'YYYY-MM-DD'), ''),
                        '/compliance'
                 FROM compliance_items ci
