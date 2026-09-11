@@ -842,6 +842,15 @@ func respondError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, gin.H{"error": "duplicate value"})
 		return
 	}
+	// A constraint violation is the request's fault, not the server's. Without
+	// this the fallback below answered 500 with the raw driver text — and the
+	// web app shows the service's error verbatim, so whoever was filling the
+	// form got "null value in column \"permit_expiry\" of relation \"drivers\"
+	// violates not-null constraint (SQLSTATE 23502)".
+	if msg, ok := badRequestFromPg(err); ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+		return
+	}
 	c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 }
 
