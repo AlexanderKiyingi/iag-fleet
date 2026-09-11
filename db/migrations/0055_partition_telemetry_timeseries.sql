@@ -29,6 +29,7 @@ DECLARE
     first_month   DATE;
     last_month    DATE;
     m             DATE;
+    old_index     TEXT;
 BEGIN
     existing := to_regclass('telemetry_timeseries');
     IF existing IS NULL THEN
