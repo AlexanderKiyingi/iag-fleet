@@ -229,7 +229,7 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	(&handlers.Admin{Repo: repo, Cache: opts.Cache, Config: opts.Config}).Register(api)
 	(&handlers.Reference{Cache: opts.Cache, TTL: opts.TTLReference}).Register(api)
-	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL, Config: opts.Config, Warehouse: opts.Warehouse}).Register(api)
+	(&handlers.Workflows{Repo: repo, Events: opts.Events, RoutingOSRMURL: opts.RoutingOSRMURL, Config: opts.Config, Warehouse: opts.Warehouse, IoTStore: opts.IoTStore, IoTHub: opts.IoTHub}).Register(api)
 	(&handlers.Inspections{Repo: repo}).Register(api)
 	(&handlers.PMSchedules{Repo: repo, Events: opts.Events}).Register(api)
 	(&handlers.Dashboard{Repo: repo, Cache: opts.Cache, TTL: opts.TTLDashboard}).Register(api)
