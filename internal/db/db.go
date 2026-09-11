@@ -17,6 +17,9 @@ import (
 
 // Connect parses the URL and pings the database to fail fast on bad config.
 // Pass an empty url to read from $DATABASE_URL.
+// DefaultSearchPath is used when the DSN does not name a schema of its own.
+const DefaultSearchPath = "iag_fleet, public"
+
 func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	if url == "" {
 		url = os.Getenv("DATABASE_URL")
@@ -39,13 +42,31 @@ func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	cfg.ConnConfig.ConnectTimeout = 10 * time.Second
 
 	// Isolate on the shared Railway database in this service's own schema, pinned
-	// in code rather than depending on a ?search_path= param in DATABASE_URL
-	// (which, if dropped, would silently land tables in public). Overrides any
-	// value parsed from the DSN; falls back to public for not-yet-relocated tables.
+	// in code rather than depending on a ?search_path= param (which, if dropped,
+	// would silently land tables in public).
+	//
+	// But only when the DSN does not name one. This used to override the DSN
+	// unconditionally, and that broke the split this service actually runs:
+	// fleet owns TWO schemas on the shared database — one relational, one for
+	// time-series — and TELEMETRY_DATABASE_URL carries the telemetry schema in
+	// its search_path. Forcing "iag_fleet, public" onto that pool sent every
+	// ping READ to the relational schema, where telemetry_timeseries does not
+	// exist, and on to public, where it is empty.
+	//
+	// The gateway wrote to the telemetry schema and this service read somewhere
+	// else. Neither side errored: writes succeeded, reads returned an empty
+	// array, and a vehicle reporting every twenty seconds had no history at all.
+	//
+	// So a DSN that names a schema is now honoured — it is the only way this
+	// service can address two schemas through one connect function — and the
+	// default still applies when it does not, which is what keeps tables out of
+	// public on the operational pool.
 	if cfg.ConnConfig.RuntimeParams == nil {
 		cfg.ConnConfig.RuntimeParams = map[string]string{}
 	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = "iag_fleet, public"
+	if strings.TrimSpace(cfg.ConnConfig.RuntimeParams["search_path"]) == "" {
+		cfg.ConnConfig.RuntimeParams["search_path"] = DefaultSearchPath
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

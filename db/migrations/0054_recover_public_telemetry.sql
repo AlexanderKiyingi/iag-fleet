@@ -38,6 +38,25 @@ BEGIN
         RETURN;
     END IF;
 
+    -- The target must exist. Without this guard the INSERT below raises
+    -- "relation does not exist" and, because autoMigrate refuses to serve on a
+    -- failed migration, no fleet deploy lands until someone edits a
+    -- forward-only migration.
+    --
+    -- It genuinely does not exist here. Fleet owns two schemas on the shared
+    -- database, one relational and one for time-series, and the pings live in
+    -- the TELEMETRY schema — not in iag_fleet and not in public. Copying
+    -- public into iag_fleet was the wrong move for this architecture; the fix
+    -- is that each pool addresses its own schema, which is handled in code.
+    --
+    -- Left in place rather than deleted because forward-only migrations are
+    -- never edited once applied, and a no-op that explains itself is worth
+    -- more than a removed file.
+    IF to_regclass('iag_fleet.telemetry_timeseries') IS NULL THEN
+        RAISE NOTICE 'iag_fleet.telemetry_timeseries does not exist — telemetry lives in fleet''s time-series schema, so there is nothing to recover into';
+        RETURN;
+    END IF;
+
     SELECT count(*) INTO present FROM public.telemetry_timeseries;
     IF present = 0 THEN
         RAISE NOTICE 'public.telemetry_timeseries is empty — nothing to recover';
