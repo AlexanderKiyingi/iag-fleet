@@ -34,7 +34,15 @@ var (
 	errVehicleInUse              = errors.New("vehicle is referenced by a live journey")
 	errDriverInUse               = errors.New("driver is referenced by a live journey or vehicle")
 	errTyrePositionTaken         = errors.New("a tyre is already mounted at this position")
+	errInvalidTyre               = errors.New("invalid tyre")
+	errInvalidInspectionTemplate = errors.New("invalid inspection template")
 )
+
+// inspectionTemplateKinds mirrors the CHECK constraint on
+// inspection_templates.kind (migration 0009). Kept next to the validator so the
+// two are changed together; drifting from the constraint just moves the failure
+// back into SQL, which is what this file exists to prevent.
+var inspectionTemplateKinds = []string{"pre-trip", "post-trip", "periodic"}
 
 func containsString(list []string, v string) bool {
 	return slices.Contains(list, v)
@@ -400,6 +408,78 @@ func isRetiredTyre(status string) bool {
 		return true
 	}
 	return false
+}
+
+// validateTyre requires the two fields whose empty value cannot reach Postgres.
+//
+// A create missing either came back as 500/502 carrying the raw driver text —
+// `null value in column "mounted_date" of relation "tyres" violates not-null
+// constraint (SQLSTATE 23502)` — and the web app shows the service's error
+// verbatim, so that is what an operator filling the form was shown.
+//
+// Only these two, deliberately. tyres declares seven columns NOT NULL, but NOT
+// NULL is not the same as non-empty: Postgres accepts "" for a TEXT column, so
+// brand, model, serial, position and status all insert fine when blank and are
+// not this function's business. The store translates "" to NULL for
+// `dbcast:"uuid"` and `dbcast:"date"` fields, because Postgres cannot parse ""
+// as either — and those are exactly vehicle_id and mounted_date, the two that
+// actually fail.
+//
+// Requiring the rest would be a product decision rather than a bug fix, and one
+// that changes what the API accepts: TestIntegration_TyrePositionUnique creates
+// tyres carrying no model or serial, which is legitimate today.
+//
+// vehicleId is checked here rather than relying on validateVehicleExists, which
+// treats "" as "not specified" and returns nil. That is right where a vehicle is
+// optional, and wrong for a tyre, which is mounted on one by definition.
+//
+// Tread depths are range-checked, not required: 0 is a real reading (worn flat)
+// and the column defaults to 0, so "absent" and "zero" cannot be told apart.
+func validateTyre(t *models.Tyre) error {
+	if t == nil {
+		return nil
+	}
+	for _, f := range []struct {
+		name  string
+		value string
+	}{
+		{"vehicleId", t.VehicleID},
+		{"mountedDate", t.MountedDate},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			return fmt.Errorf("%w: %s is required", errInvalidTyre, f.name)
+		}
+	}
+	if _, err := parseDate(t.MountedDate); err != nil {
+		return fmt.Errorf("%w: mountedDate must be YYYY-MM-DD", errInvalidTyre)
+	}
+	if t.TreadDepthMm < 0 || t.TreadInitialMm < 0 {
+		return fmt.Errorf("%w: tread depths must be non-negative", errInvalidTyre)
+	}
+	return nil
+}
+
+// validateInspectionTemplate checks kind against its CHECK constraint.
+//
+// kind is constrained to three values (migration 0009). A create without it sent
+// the empty string, the constraint rejected it, and the caller got a 500/502
+// quoting the constraint name — which names a database object rather than the
+// field the operator left blank. Answering here means a 400 that says which
+// values are allowed.
+//
+// name is NOT NULL but, as above, "" satisfies that, so it is not required here.
+func validateInspectionTemplate(t *models.InspectionTemplate) error {
+	if t == nil {
+		return nil
+	}
+	kind := strings.TrimSpace(t.Kind)
+	if !containsString(inspectionTemplateKinds, kind) {
+		return fmt.Errorf(
+			"%w: kind must be one of %s (got %q)",
+			errInvalidInspectionTemplate, strings.Join(inspectionTemplateKinds, ", "), kind,
+		)
+	}
+	return nil
 }
 
 // validateTyrePosition enforces one current tyre per (vehicle, position):

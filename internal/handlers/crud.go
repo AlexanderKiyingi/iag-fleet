@@ -860,6 +860,7 @@ func respondMutationError(c *gin.Context, err error) {
 		errors.Is(err, store.ErrNotFound) ||
 		errors.Is(err, errInvalidPMSchedule) || errors.Is(err, errInvalidMaintenanceStatus) ||
 		errors.Is(err, errInvalidComplianceDoc) || errors.Is(err, errInvalidComplianceExpiry) ||
+		errors.Is(err, errInvalidTyre) || errors.Is(err, errInvalidInspectionTemplate) ||
 		errors.Is(err, errTripRefsRequired) ||
 		errors.Is(err, errAuthorisationRefsRequired) ||
 		errors.Is(err, errPermitNotAuthorised) {
