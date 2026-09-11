@@ -24,6 +24,7 @@ import (
 	"github.com/iag/fleet-tool/backend/internal/consumer"
 	pgdb "github.com/iag/fleet-tool/backend/internal/db"
 	"github.com/iag/fleet-tool/backend/internal/events"
+	"github.com/iag/fleet-tool/backend/internal/handlers"
 	"github.com/iag/fleet-tool/backend/internal/jobs"
 	fleetmw "github.com/iag/fleet-tool/backend/internal/middleware"
 	"github.com/iag/fleet-tool/backend/internal/migrate"
@@ -99,6 +100,7 @@ func main() {
 	repo := store.NewRepository(operationalPool)
 	repo.AttachTelemetry(telemetryPool)
 	reportSchemaDrift(context.Background(), operationalPool, repo)
+	reportTelemetryLocation(context.Background(), operationalPool, telemetryPool)
 	iotStore := iot.NewSplitStore(operationalPool, telemetryPool)
 	verifier := authclient.NewVerifier(authclient.Options{
 		JWKSURL:  cfg.JWKSURL,
@@ -460,6 +462,59 @@ var unmappedColumnsAllowlist = map[string]bool{}
 // Unmapped columns only warn. Nothing breaks at runtime — the column is simply
 // unreadable and unwritable through the API — so refusing to serve over one
 // would trade a quiet data gap for an outage.
+// reportTelemetryLocation says, once at boot, which physical table each pool
+// reaches for pings.
+//
+// This service holds two pools and they need not agree: migrations run on the
+// operational pool, so that is where telemetry_timeseries gets CREATED, while
+// pings are READ through the telemetry pool. A split between those two is
+// invisible to every other check here — reportSchemaDrift looks for missing
+// COLUMNS, and the columns are all present on the wrong relation.
+//
+// It cost a day to find that the gateway was writing to one table called
+// telemetry_timeseries while this service read another. Both logged success
+// throughout. Two lines at boot end that argument permanently.
+//
+// Logged, never fatal. Unlike the gateway — which can refuse to start because
+// it has somewhere else to put the data, namely nowhere — this service is the
+// reader. Refusing to serve the whole fleet API over a telemetry misconfig
+// would turn a missing map layer into an outage.
+func reportTelemetryLocation(parent context.Context, operational, telemetry *pgxpool.Pool) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
+	defer cancel()
+
+	pools := []struct {
+		name string
+		pool *pgxpool.Pool
+	}{
+		{"operational (migrations, hot state)", operational},
+		{"telemetry (ping reads)", telemetry},
+	}
+	var locs []handlers.TelemetryLocation
+	for _, p := range pools {
+		if p.pool == nil {
+			continue // single-pool deployment; the operational entry covers it
+		}
+		loc := handlers.DescribeTelemetryLocation(ctx, p.name, p.pool, iot.PingsTable)
+		locs = append(locs, loc)
+		slog.Info("telemetry table location",
+			"pool", loc.Pool, "database", loc.Database, "search_path", loc.SearchPath,
+			"resolves_to", loc.Resolved, "also_in", loc.AlsoIn, "approx_rows", loc.ApproxRows,
+			"err", loc.Error)
+	}
+
+	// The comparison is the point. Two pools reaching different databases or
+	// different schemas means pings written through one are unreadable through
+	// the other, which is exactly the fault this exists to surface.
+	if len(locs) == 2 && locs[0].Error == "" && locs[1].Error == "" {
+		if locs[0].Database != locs[1].Database || locs[0].Resolved != locs[1].Resolved {
+			slog.Error("telemetry pools disagree about where pings live — history written by the gateway may be unreadable here",
+				"operational", locs[0].Database+"."+locs[0].Resolved,
+				"telemetry", locs[1].Database+"."+locs[1].Resolved)
+		}
+	}
+}
+
 func reportSchemaDrift(parent context.Context, pool *pgxpool.Pool, repo *store.Repository) {
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
