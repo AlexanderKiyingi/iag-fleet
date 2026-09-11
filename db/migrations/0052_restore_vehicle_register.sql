@@ -18,9 +18,12 @@
 -- NOTHING, so the one row that survived and anything an operator has added
 -- since are left alone.
 --
--- The permit caveat from 0046 still stands: permit_expiry remains 2000-01-01 on
--- the restored drivers, so they stay un-dispatchable until real permit data is
--- imported. Inventing expiry dates would fabricate a compliance record.
+-- Vehicles only. 0046 restored drivers as well, but drivers were not deleted
+-- here and re-inserting them would be noise at best. Their permit_expiry is
+-- still 2000-01-01 from the original seed, so they remain un-dispatchable until
+-- real permit data is imported — unchanged by this migration either way, and
+-- not something it can fix: inventing expiry dates would fabricate a compliance
+-- record.
 
 CREATE OR REPLACE FUNCTION fleet_id_to_uuid(v TEXT) RETURNS UUID AS $fn$
     SELECT CASE
@@ -76,7 +79,18 @@ INSERT INTO vehicles (id, plate, type, make, model, year, vehicle_class, ownersh
   (fleet_id_to_uuid('VEH-UBJ044N'), 'UBJ044N', 'DOZER', 'SANY', 'SANNY', 0, 'equipment', 'Hired', NULL, 'idle', '', 0, 0, '', TIMESTAMPTZ '2026-04-27T00:00:00Z', 'operational'),
   (fleet_id_to_uuid('VEH-UG1971W'), 'UG1971W', 'BACKHOE', 'KOMATSU', 'KOMATSU', 0, 'equipment', 'MOW', (SELECT d.id FROM drivers d WHERE d.id = fleet_id_to_uuid('DRV-WAISWA-SYRUS')), 'idle', '', 0, 0, '', TIMESTAMPTZ '2026-04-27T00:00:00Z', 'operational'),
   (fleet_id_to_uuid('VEH-UG1776W'), 'UG1776W', 'DOZER', 'KOMATSU', 'KOMATSU', 0, 'equipment', 'MOW', (SELECT d.id FROM drivers d WHERE d.id = fleet_id_to_uuid('DRV-TURYASIIMA-FRANK')), 'idle', '', 0, 0, '', TIMESTAMPTZ '2026-04-27T00:00:00Z', 'operational')
-ON CONFLICT (id) DO NOTHING;
+-- Bare ON CONFLICT, not ON CONFLICT (id).
+--
+-- vehicles.plate is NOT NULL UNIQUE (0001), so the id is not the only way these
+-- rows can collide. An operator who lost the register has every reason to have
+-- re-entered a vehicle by hand since; that row carries a fresh gen_random_uuid()
+-- and the SAME plate. Targeting (id) would miss it, the insert would raise a
+-- unique violation on vehicles_plate_key, and a failed migration is an outage —
+-- autoMigrate refuses to serve. The bare form skips a row conflicting on ANY
+-- constraint, which is what "leave anything already there alone" actually means.
+-- This is what 0032 used, for this exact reason; 0046 narrowed it to (id), which
+-- was safe then because nothing could have re-added a plate.
+ON CONFLICT DO NOTHING;
 
 -- Remove the probe row whose `replace` PUT caused the clearance. Matched on the
 -- primary key alone, which is exact: the id was service-assigned on insert, so
