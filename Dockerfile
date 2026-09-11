@@ -58,7 +58,19 @@ FROM base AS fleet-iot-clone
 # Behaviour, not symbols, so a stale pin would compile perfectly and simply keep
 # discarding the data — exactly the failure mode the 61b50de note above warns
 # about.
-ARG FLEET_IOT_REF=758bc4b
+# Bumped to 2a88e94: fleet-iot now pins its own search_path and refuses to
+# start if its pings table resolves to an unexpected schema.
+#
+# This is the fix for a silent outage. The services share one database and
+# separate by schema; fleet-iot took its schema from a ?search_path= DSN param,
+# and with that param missing it wrote pings to public.telemetry_timeseries
+# while this service read iag_fleet.telemetry_timeseries. The table exists in
+# both, so every insert succeeded, every read returned an empty array, and a
+# vehicle reporting every twenty seconds had no history at all.
+#
+# Behaviour again, not symbols — a stale pin here compiles and keeps writing to
+# the wrong schema.
+ARG FLEET_IOT_REF=2a88e94
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
