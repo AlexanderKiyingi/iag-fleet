@@ -94,6 +94,14 @@ func (h *IoT) Register(rg *gin.RouterGroup) {
 	// for telemetry, and gating it on view_telemetry would have the map draw
 	// vehicles without the boundaries they are being judged against.
 	rg.GET("/geofence-pois", auth.RequireAnyPerm("view_vehicle", "view_telemetry"), h.requireStore, h.geofencePOIs)
+	// Managing fences is gated on manage_iot_device rather than a new
+	// permission of its own: it is the grant that already covers tracking
+	// configuration, and inventing a codename here would mean seeding it in the
+	// auth service first and deploying the two in the right order for anyone to
+	// hold it. A fence governs what telemetry does, which is the same job.
+	rg.POST("/geofence-pois", auth.RequirePerm("manage_iot_device"), h.requireStore, h.upsertGeofencePOI)
+	rg.PATCH("/geofence-pois/:name", auth.RequirePerm("manage_iot_device"), h.requireStore, h.upsertGeofencePOI)
+	rg.DELETE("/geofence-pois/:name", auth.RequirePerm("manage_iot_device"), h.requireStore, h.deleteGeofencePOI)
 	rg.POST("/vehicles/:id/trips/detect", auth.RequirePerm("change_trip"), h.requireStore, h.detectTrips)
 
 	rg.GET("/vehicles/:id/fuel/history", fuelRead, h.requireStore, h.fuelHistory)
@@ -837,6 +845,172 @@ const ssePollInterval = 2 * time.Second
 // maxDailyTelemetryRange allows reading rolled-up history beyond raw ping retention.
 const maxDailyTelemetryRange = 365 * 24 * time.Hour
 
+// geofencePOIRecord is the management shape: a fence as an operator edits it,
+// which includes whether it is switched on. The evaluator never sees inactive
+// fences, so the read shape below has no room for the flag.
+type geofencePOIRecord struct {
+	geofencePOI
+	IsActive  bool      `json:"isActive"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// geofencePOIBody is what a create or edit sends.
+//
+// Pointers on every optional field so "omitted" and "set to zero" stay
+// distinguishable: radiusKm 0 must be rejected as a fence that can never
+// trigger, not silently read as "leave it alone", and isActive false must be
+// able to switch a fence off.
+type geofencePOIBody struct {
+	Name     *string  `json:"name"`
+	Lat      *float64 `json:"lat"`
+	Lng      *float64 `json:"lng"`
+	Type     *string  `json:"type"`
+	RadiusKm *float64 `json:"radiusKm"`
+	IsActive *bool    `json:"isActive"`
+}
+
+// upsertGeofencePOI creates a fence (POST) or edits one (PATCH /:name).
+//
+// Both land here because name is the primary key, so there is one row-shaped
+// operation and no meaningful difference between them. A PATCH that changes the
+// name is a rename, and a rename is a delete plus a create — deliberately, since
+// vehicle_geofence_state is keyed by poi_name and inheriting another fence's
+// enter/exit history would fire arrivals for crossings that never happened.
+func (h *IoT) upsertGeofencePOI(c *gin.Context) {
+	var body geofencePOIBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	priorName := strings.TrimSpace(c.Param("name"))
+	ctx := c.Request.Context()
+
+	// On PATCH, start from the stored row so an edit of one field does not
+	// blank the rest — the store call is an upsert and writes every column.
+	current := iot.GeofencePOIRecord{IsActive: true}
+	if priorName != "" {
+		existing, err := h.Store.ListGeofencePOIs(ctx)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		found := false
+		for _, p := range existing {
+			if p.Name == priorName {
+				current, found = p, true
+				break
+			}
+		}
+		if !found {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no geofence named " + priorName})
+			return
+		}
+	}
+
+	if body.Name != nil {
+		current.Name = strings.TrimSpace(*body.Name)
+	}
+	if body.Lat != nil {
+		current.Lat = *body.Lat
+	}
+	if body.Lng != nil {
+		current.Lng = *body.Lng
+	}
+	if body.Type != nil {
+		current.Type = strings.TrimSpace(*body.Type)
+	}
+	if body.RadiusKm != nil {
+		current.RadiusKm = *body.RadiusKm
+	}
+	if body.IsActive != nil {
+		current.IsActive = *body.IsActive
+	}
+
+	if msg := validateGeofencePOI(current); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+		return
+	}
+
+	if err := h.Store.UpsertGeofencePOI(ctx, current); err != nil {
+		// The Go validation above should have caught anything the CHECK
+		// constraints would reject, so this is the backstop for the rules that
+		// live only in the database.
+		if msg, ok := badRequestFromPg(err); ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// A rename leaves the old row behind, and two fences where the operator
+	// meant one is worse than the rename failing.
+	if priorName != "" && priorName != current.Name {
+		if _, err := h.Store.DeleteGeofencePOI(ctx, priorName); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	status := http.StatusOK
+	if priorName == "" {
+		status = http.StatusCreated
+	}
+	c.JSON(status, geofencePOIRecord{
+		geofencePOI: geofencePOI{
+			Name: current.Name, Lat: current.Lat, Lng: current.Lng,
+			Type: current.Type, RadiusKm: current.RadiusKm,
+		},
+		IsActive:  current.IsActive,
+		UpdatedAt: time.Now().UTC(),
+	})
+}
+
+// validateGeofencePOI reports why a fence is unusable, in words.
+//
+// The table carries the same rules as CHECK constraints, but a constraint
+// violation surfaces as a 500 naming geofence_pois_radius_positive, which tells
+// an operator nothing about what to type instead.
+func validateGeofencePOI(p iot.GeofencePOIRecord) string {
+	switch {
+	case p.Name == "":
+		return "name is required"
+	case p.Lat < -90 || p.Lat > 90:
+		return "lat must be between -90 and 90"
+	case p.Lng < -180 || p.Lng > 180:
+		return "lng must be between -180 and 180"
+	case p.RadiusKm <= 0:
+		// Zero is the dangerous one: it stores cleanly and the fence then never
+		// triggers, so the site looks monitored and silently is not.
+		return "radiusKm must be greater than 0"
+	case p.Lat == 0 && p.Lng == 0:
+		return "lat/lng 0,0 is the no-fix sentinel, not a location"
+	}
+	return ""
+}
+
+func (h *IoT) deleteGeofencePOI(c *gin.Context) {
+	name := strings.TrimSpace(c.Param("name"))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	removed, err := h.Store.DeleteGeofencePOI(c.Request.Context(), name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !removed {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no geofence named " + name})
+		return
+	}
+	// The row is gone; vehicle_geofence_state rows for it are left alone. They
+	// are keyed by name, so they are inert until a fence of that name exists
+	// again — at which point starting from the old state is the correct
+	// behaviour for a fence that was switched off and back on.
+	c.Status(http.StatusNoContent)
+}
+
 // geofencePOI is the wire shape for GET /api/geofence-pois. iot.GeofencePOI
 // carries no JSON tags — it is an internal evaluation type — so the API shape
 // is declared here rather than leaking Go field names to the client.
@@ -857,14 +1031,38 @@ type geofencePOI struct {
 // on screen was not the circle a vehicle was being judged against, and an
 // arrival event could fire with the truck drawn well outside the fence.
 func (h *IoT) geofencePOIs(c *gin.Context) {
-	pois, err := h.Store.LoadGeofencePOIs(c.Request.Context())
+	ctx := c.Request.Context()
+	// ?all=1 is the management view: it includes deactivated fences, which the
+	// evaluator never sees. Without them there is no way to switch one back on.
+	if c.Query("all") == "1" || c.Query("all") == "true" {
+		records, err := h.Store.ListGeofencePOIs(ctx)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		out := make([]geofencePOIRecord, 0, len(records))
+		for _, p := range records {
+			out = append(out, geofencePOIRecord{
+				geofencePOI: geofencePOI{Name: p.Name, Lat: p.Lat, Lng: p.Lng, Type: p.Type, RadiusKm: p.RadiusKm},
+				IsActive:    p.IsActive,
+				UpdatedAt:   p.UpdatedAt,
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{"pois": out, "count": len(out)})
+		return
+	}
+	pois, err := h.Store.LoadGeofencePOIs(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// An empty table is not an error: the gateways fall back to their built-in
-	// set, so the honest answer is an empty list plus the flag saying the
-	// evaluated geofences are the defaults rather than these.
+	// An empty table is not an error, and since fences became editable it no
+	// longer implies the built-in set either: a gateway that has successfully
+	// read an empty table enforces nothing, and only one that has never
+	// reached the database still falls back. usingDefaults therefore reports
+	// the one case this service can actually observe — no rows AND no
+	// successful management of them — rather than asserting what some other
+	// process is currently enforcing, which it cannot see.
 	out := make([]geofencePOI, 0, len(pois))
 	for _, p := range pois {
 		out = append(out, geofencePOI{
