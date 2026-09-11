@@ -15,6 +15,12 @@ func NewTyreResource(repo *store.Repository) *Resource[models.Tyre, *models.Tyre
 		Repo: repo, Collection: repo.Tyres, Entity: "tyre", IDPrefix: "TYR",
 	}
 	check := func(c *gin.Context, t *models.Tyre) error {
+		// Required fields first: validateVehicleExists treats an empty id as
+		// "not specified" and returns nil, so without this an absent vehicleId
+		// reached the NOT NULL constraint and came back as a raw driver error.
+		if err := validateTyre(t); err != nil {
+			return err
+		}
 		if err := validateVehicleExists(c.Request.Context(), repo, t.VehicleID); err != nil {
 			return err
 		}

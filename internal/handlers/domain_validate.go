@@ -34,7 +34,15 @@ var (
 	errVehicleInUse              = errors.New("vehicle is referenced by a live journey")
 	errDriverInUse               = errors.New("driver is referenced by a live journey or vehicle")
 	errTyrePositionTaken         = errors.New("a tyre is already mounted at this position")
+	errInvalidTyre               = errors.New("invalid tyre")
+	errInvalidInspectionTemplate = errors.New("invalid inspection template")
 )
+
+// inspectionTemplateKinds mirrors the CHECK constraint on
+// inspection_templates.kind (migration 0009). Kept next to the validator so the
+// two are changed together; drifting from the constraint just moves the failure
+// back into SQL, which is what this file exists to prevent.
+var inspectionTemplateKinds = []string{"pre-trip", "post-trip", "periodic"}
 
 func containsString(list []string, v string) bool {
 	return slices.Contains(list, v)
@@ -400,6 +408,77 @@ func isRetiredTyre(status string) bool {
 		return true
 	}
 	return false
+}
+
+// validateTyre checks the fields tyres declares NOT NULL (migration 0001)
+// before the row reaches Postgres.
+//
+// Without this a create missing any of them came back as 500/502 carrying the
+// raw driver text — `null value in column "mounted_date" of relation "tyres"
+// violates not-null constraint (SQLSTATE 23502)` — which the web app then shows
+// to whoever was filling the form. The constraint is right; letting it be the
+// first thing that notices is not.
+//
+// vehicleId is checked here rather than relying on validateVehicleExists, which
+// treats "" as "not specified" and returns nil. That is correct for the entities
+// where a vehicle is optional, and wrong for a tyre, which is mounted on one by
+// definition.
+//
+// Tread depths are only range-checked, not required: 0 is a legitimate reading
+// and the column has no default, so "absent" and "worn flat" are the same value
+// here and cannot be told apart.
+func validateTyre(t *models.Tyre) error {
+	if t == nil {
+		return nil
+	}
+	for _, f := range []struct {
+		name  string
+		value string
+	}{
+		{"vehicleId", t.VehicleID},
+		{"position", t.Position},
+		{"brand", t.Brand},
+		{"model", t.Model},
+		{"serial", t.Serial},
+		{"mountedDate", t.MountedDate},
+		{"status", t.Status},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			return fmt.Errorf("%w: %s is required", errInvalidTyre, f.name)
+		}
+	}
+	if _, err := parseDate(t.MountedDate); err != nil {
+		return fmt.Errorf("%w: mountedDate must be YYYY-MM-DD", errInvalidTyre)
+	}
+	if t.TreadDepthMm < 0 || t.TreadInitialMm < 0 {
+		return fmt.Errorf("%w: tread depths must be non-negative", errInvalidTyre)
+	}
+	return nil
+}
+
+// validateInspectionTemplate checks name and kind before the row reaches
+// Postgres.
+//
+// kind carries a CHECK constraint (migration 0009) listing the three valid
+// values. A create without it sent the empty string, the constraint rejected it,
+// and the caller got a 500/502 quoting the constraint name — which names the
+// database object rather than the field the operator left blank. Answering here
+// means a 400 that says which values are allowed.
+func validateInspectionTemplate(t *models.InspectionTemplate) error {
+	if t == nil {
+		return nil
+	}
+	if strings.TrimSpace(t.Name) == "" {
+		return fmt.Errorf("%w: name is required", errInvalidInspectionTemplate)
+	}
+	kind := strings.TrimSpace(t.Kind)
+	if !containsString(inspectionTemplateKinds, kind) {
+		return fmt.Errorf(
+			"%w: kind must be one of %s (got %q)",
+			errInvalidInspectionTemplate, strings.Join(inspectionTemplateKinds, ", "), kind,
+		)
+	}
+	return nil
 }
 
 // validateTyrePosition enforces one current tyre per (vehicle, position):

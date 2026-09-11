@@ -19,6 +19,13 @@ func (h *Inspections) Register(rg *gin.RouterGroup) {
 		Repo: h.Repo, Collection: h.Repo.InspectionTemplates,
 		Entity: "inspection_template", IDPrefix: "TPL",
 	}
+	// kind carries a CHECK constraint; without this a blank one was rejected by
+	// Postgres and surfaced as a 500 quoting the constraint name.
+	tplCheck := func(_ *gin.Context, t *models.InspectionTemplate) error {
+		return validateInspectionTemplate(t)
+	}
+	tpl.BeforeCreate = tplCheck
+	tpl.BeforeUpdate = tplCheck
 	tpl.Register(rg, "/inspection-templates")
 
 	ins := Resource[models.VehicleInspection, *models.VehicleInspection]{
