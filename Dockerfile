@@ -36,7 +36,20 @@ FROM base AS fleet-iot-clone
 # edge/Fleet_IoT and so builds green against the working tree, which is exactly
 # how a stale pin gets missed locally. If you changed fleet and fleet-iot
 # together, bump this in the same commit.
-ARG FLEET_IOT_REF=6b7ef4e
+# Bumped to 2d28bf1: the same 0043 fallout as c3a18db above, on the WRITE side
+# this time. iot_devices.vehicle_id and device_commands.vehicle_id are uuid, and
+# fleet-iot bound them with NULLIF($n, '') — comparing against a text literal
+# pins the parameter to text, so the statement was assigning text to a uuid
+# column and Postgres refused it outright:
+#
+#   column "vehicle_id" is of type uuid but expression is of type text
+#   (SQLSTATE 42804)
+#
+# Registering a device, editing one, and queuing an immobilise all failed. No
+# input value helped — the statement could not run. The fix lives entirely in
+# fleet-iot, so leaving this pin behind would keep every device registration
+# broken with a green fleet build, exactly as the c3a18db note warns.
+ARG FLEET_IOT_REF=2d28bf1
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
