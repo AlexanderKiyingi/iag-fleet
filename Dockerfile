@@ -70,7 +70,20 @@ FROM base AS fleet-iot-clone
 #
 # Behaviour again, not symbols — a stale pin here compiles and keeps writing to
 # the wrong schema.
-ARG FLEET_IOT_REF=2a88e94
+# Bumped to aec4be8: the schema pin now honours a search_path named in the DSN,
+# and the boot assertion treats a search_path FALLBACK as legitimate rather than
+# fatal.
+#
+# 2a88e94 would have refused to start the gateway here. telemetry_timeseries
+# lives in public on the deployed database — a scan found 455 rows there and
+# none in iag_fleet — and the assertion demanded the leading schema. Fleet's
+# tables are part-way through a move out of public, so resolving through the
+# "iag_fleet, public" fallback is exactly what keeps this working.
+#
+# Still fatal: a table unreachable on this connection while existing in another
+# schema. That is the original bug and it is distinguishable, because the name
+# does not resolve at all.
+ARG FLEET_IOT_REF=aec4be8
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
