@@ -44,11 +44,16 @@ func TestValidateFutureExpiry(t *testing.T) {
 	}
 }
 
-// A tyre create missing a NOT NULL field used to reach Postgres and come back
-// as a 500/502 carrying the raw driver text — `null value in column
+// A tyre create missing vehicleId or mountedDate used to reach Postgres and come
+// back as a 500/502 carrying the raw driver text — `null value in column
 // "mounted_date" ... violates not-null constraint (SQLSTATE 23502)` — which the
-// web app then showed to whoever was filling the form. These pin the field
-// checks that answer first, and the sentinel that maps them to 400.
+// web app then showed to whoever was filling the form.
+//
+// The other five NOT NULL columns are deliberately NOT required: NOT NULL is not
+// non-empty, and Postgres accepts "" for a TEXT column. Only the uuid and date
+// columns have their "" translated to NULL on write, and only they fail. The
+// "blank brand still accepted" case below is the one that keeps this honest — it
+// is what TestIntegration_TyrePositionUnique relies on.
 func TestValidateTyre_requiredFields(t *testing.T) {
 	ok := models.Tyre{
 		VehicleID: "8f14e45f-ceea-367a-9a36-dedd4bea2543", Position: "FL",
@@ -64,12 +69,7 @@ func TestValidateTyre_requiredFields(t *testing.T) {
 		mut   func(*models.Tyre)
 	}{
 		{"vehicleId", func(x *models.Tyre) { x.VehicleID = "" }},
-		{"position", func(x *models.Tyre) { x.Position = "" }},
-		{"brand", func(x *models.Tyre) { x.Brand = "" }},
-		{"model", func(x *models.Tyre) { x.Model = "" }},
-		{"serial", func(x *models.Tyre) { x.Serial = "" }},
 		{"mountedDate", func(x *models.Tyre) { x.MountedDate = "" }},
-		{"status", func(x *models.Tyre) { x.Status = "" }},
 	} {
 		bad := ok
 		tc.mut(&bad)
@@ -80,19 +80,39 @@ func TestValidateTyre_requiredFields(t *testing.T) {
 		if !errors.Is(err, errInvalidTyre) {
 			t.Fatalf("missing %s: want errInvalidTyre (maps to 400), got %v", tc.field, err)
 		}
-		// The message has to name the field — the whole point is that the
-		// operator learns which box to fill, not which column is NOT NULL.
+		// The message has to name the field — the point is that the operator
+		// learns which box to fill, not which column is NOT NULL.
 		if !strings.Contains(err.Error(), tc.field) {
 			t.Fatalf("missing %s: message does not name the field: %v", tc.field, err)
 		}
 	}
 
+	// Blank text columns stay acceptable. Rejecting them would be a product
+	// decision, not a bug fix, and would break callers that create tyres
+	// without a model or serial today.
+	for _, tc := range []struct {
+		field string
+		mut   func(*models.Tyre)
+	}{
+		{"brand", func(x *models.Tyre) { x.Brand = "" }},
+		{"model", func(x *models.Tyre) { x.Model = "" }},
+		{"serial", func(x *models.Tyre) { x.Serial = "" }},
+		{"position", func(x *models.Tyre) { x.Position = "" }},
+		{"status", func(x *models.Tyre) { x.Status = "" }},
+	} {
+		blank := ok
+		tc.mut(&blank)
+		if err := validateTyre(&blank); err != nil {
+			t.Fatalf("blank %s should still be accepted: %v", tc.field, err)
+		}
+	}
+
 	// Whitespace is not a value: " " would pass a bare != "" check and then hit
 	// the constraint anyway.
-	blank := ok
-	blank.Position = "   "
-	if err := validateTyre(&blank); err == nil {
-		t.Fatal("whitespace-only position accepted")
+	ws := ok
+	ws.VehicleID = "   "
+	if err := validateTyre(&ws); err == nil {
+		t.Fatal("whitespace-only vehicleId accepted")
 	}
 
 	badDate := ok
@@ -137,7 +157,8 @@ func TestValidateInspectionTemplate_kind(t *testing.T) {
 			t.Fatalf("kind %q: message does not list the allowed values: %v", bad, err)
 		}
 	}
-	if err := validateInspectionTemplate(&models.InspectionTemplate{Kind: "pre-trip"}); err == nil {
-		t.Fatal("missing name accepted")
+	// name is NOT NULL but "" satisfies that, so a blank name is still accepted.
+	if err := validateInspectionTemplate(&models.InspectionTemplate{Kind: "pre-trip"}); err != nil {
+		t.Fatalf("blank name should still be accepted: %v", err)
 	}
 }

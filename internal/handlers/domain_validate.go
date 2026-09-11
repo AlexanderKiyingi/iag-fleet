@@ -410,23 +410,31 @@ func isRetiredTyre(status string) bool {
 	return false
 }
 
-// validateTyre checks the fields tyres declares NOT NULL (migration 0001)
-// before the row reaches Postgres.
+// validateTyre requires the two fields whose empty value cannot reach Postgres.
 //
-// Without this a create missing any of them came back as 500/502 carrying the
-// raw driver text — `null value in column "mounted_date" of relation "tyres"
-// violates not-null constraint (SQLSTATE 23502)` — which the web app then shows
-// to whoever was filling the form. The constraint is right; letting it be the
-// first thing that notices is not.
+// A create missing either came back as 500/502 carrying the raw driver text —
+// `null value in column "mounted_date" of relation "tyres" violates not-null
+// constraint (SQLSTATE 23502)` — and the web app shows the service's error
+// verbatim, so that is what an operator filling the form was shown.
+//
+// Only these two, deliberately. tyres declares seven columns NOT NULL, but NOT
+// NULL is not the same as non-empty: Postgres accepts "" for a TEXT column, so
+// brand, model, serial, position and status all insert fine when blank and are
+// not this function's business. The store translates "" to NULL for
+// `dbcast:"uuid"` and `dbcast:"date"` fields, because Postgres cannot parse ""
+// as either — and those are exactly vehicle_id and mounted_date, the two that
+// actually fail.
+//
+// Requiring the rest would be a product decision rather than a bug fix, and one
+// that changes what the API accepts: TestIntegration_TyrePositionUnique creates
+// tyres carrying no model or serial, which is legitimate today.
 //
 // vehicleId is checked here rather than relying on validateVehicleExists, which
-// treats "" as "not specified" and returns nil. That is correct for the entities
-// where a vehicle is optional, and wrong for a tyre, which is mounted on one by
-// definition.
+// treats "" as "not specified" and returns nil. That is right where a vehicle is
+// optional, and wrong for a tyre, which is mounted on one by definition.
 //
-// Tread depths are only range-checked, not required: 0 is a legitimate reading
-// and the column has no default, so "absent" and "worn flat" are the same value
-// here and cannot be told apart.
+// Tread depths are range-checked, not required: 0 is a real reading (worn flat)
+// and the column defaults to 0, so "absent" and "zero" cannot be told apart.
 func validateTyre(t *models.Tyre) error {
 	if t == nil {
 		return nil
@@ -436,12 +444,7 @@ func validateTyre(t *models.Tyre) error {
 		value string
 	}{
 		{"vehicleId", t.VehicleID},
-		{"position", t.Position},
-		{"brand", t.Brand},
-		{"model", t.Model},
-		{"serial", t.Serial},
 		{"mountedDate", t.MountedDate},
-		{"status", t.Status},
 	} {
 		if strings.TrimSpace(f.value) == "" {
 			return fmt.Errorf("%w: %s is required", errInvalidTyre, f.name)
@@ -456,20 +459,18 @@ func validateTyre(t *models.Tyre) error {
 	return nil
 }
 
-// validateInspectionTemplate checks name and kind before the row reaches
-// Postgres.
+// validateInspectionTemplate checks kind against its CHECK constraint.
 //
-// kind carries a CHECK constraint (migration 0009) listing the three valid
-// values. A create without it sent the empty string, the constraint rejected it,
-// and the caller got a 500/502 quoting the constraint name — which names the
-// database object rather than the field the operator left blank. Answering here
-// means a 400 that says which values are allowed.
+// kind is constrained to three values (migration 0009). A create without it sent
+// the empty string, the constraint rejected it, and the caller got a 500/502
+// quoting the constraint name — which names a database object rather than the
+// field the operator left blank. Answering here means a 400 that says which
+// values are allowed.
+//
+// name is NOT NULL but, as above, "" satisfies that, so it is not required here.
 func validateInspectionTemplate(t *models.InspectionTemplate) error {
 	if t == nil {
 		return nil
-	}
-	if strings.TrimSpace(t.Name) == "" {
-		return fmt.Errorf("%w: name is required", errInvalidInspectionTemplate)
 	}
 	kind := strings.TrimSpace(t.Kind)
 	if !containsString(inspectionTemplateKinds, kind) {
