@@ -49,7 +49,16 @@ FROM base AS fleet-iot-clone
 # input value helped — the statement could not run. The fix lives entirely in
 # fleet-iot, so leaving this pin behind would keep every device registration
 # broken with a green fleet build, exactly as the c3a18db note warns.
-ARG FLEET_IOT_REF=2d28bf1
+# Bumped to 758bc4b: the HQ decoder now keeps the trailing fields it used to
+# parse past — battery level and the serving cell (mcc/mnc/lac/cellId) — and
+# carries them into telemetry_timeseries.raw. Device monitoring had nothing to
+# read before this: the platform could say where a tracker was and nothing about
+# the tracker itself.
+#
+# Behaviour, not symbols, so a stale pin would compile perfectly and simply keep
+# discarding the data — exactly the failure mode the 61b50de note above warns
+# about.
+ARG FLEET_IOT_REF=758bc4b
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
