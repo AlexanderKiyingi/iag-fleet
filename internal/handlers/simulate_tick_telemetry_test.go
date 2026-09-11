@@ -3,8 +3,8 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"encoding/json"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -63,8 +63,17 @@ func TestIntegration_SimulateTickRecordsTelemetry(t *testing.T) {
 	// Tagged at the source. Once it is a row of numbers a simulated fix is
 	// indistinguishable from a real one, and whoever reads this history later
 	// is entitled to know which it was.
-	if got := string(pings[0].Raw); !strings.Contains(got, `"source":"simulator"`) {
-		t.Fatalf("ping raw = %q, want it tagged as simulator-sourced", got)
+	// Decoded, not substring-matched: jsonb is stored parsed and comes back
+	// re-serialised with Postgres's own spacing, so a literal comparison tests
+	// the formatting rather than the tag.
+	var raw struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(pings[0].Raw, &raw); err != nil {
+		t.Fatalf("ping raw is not JSON (%q): %v", string(pings[0].Raw), err)
+	}
+	if raw.Source != "simulator" {
+		t.Fatalf("ping source = %q, want %q", raw.Source, "simulator")
 	}
 
 	// ApplyVehicleHotState must still move the registry row, or the map stops
