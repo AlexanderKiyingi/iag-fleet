@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/auth"
 	"github.com/iag/fleet-tool/backend/internal/config"
 	"github.com/iag/fleet-tool/backend/internal/events"
@@ -33,6 +34,12 @@ type Workflows struct {
 	// Warehouse is the outbound client to iag-warehouse. Non-nil only when
 	// stock delegation is enabled; nil otherwise (fleet keeps local stock).
 	Warehouse *warehouseclient.Client
+	// IoTStore and IoTHub let the simulator move vehicles the same way real
+	// hardware does — by recording a ping. Optional: nil in tests and in any
+	// deployment without telemetry tables, and simulateTick falls back to
+	// writing the registry row directly.
+	IoTStore *iot.Store
+	IoTHub   *iot.Hub
 }
 
 func (w *Workflows) Register(rg *gin.RouterGroup) {
@@ -1180,12 +1187,21 @@ func (w *Workflows) simulateTick(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	now := time.Now().UTC()
 	stepCount := 0
+	pinged := 0
 	for _, v := range vehicles {
 		if v.Status != "moving" {
 			continue
 		}
 		next := stepVehicle(v)
+		if w.simulatePing(ctx, next, now) {
+			stepCount++
+			pinged++
+			continue
+		}
+		// No telemetry store: keep the registry moving so the map still works,
+		// and accept that these vehicles have no history.
 		if _, err := w.Repo.Vehicles.Update(ctx, v.ID, func(v *models.Vehicle) {
 			v.Lat = next.Lat
 			v.Lng = next.Lng
@@ -1195,7 +1211,55 @@ func (w *Workflows) simulateTick(c *gin.Context) {
 			stepCount++
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"updated": stepCount, "tickMs": simTickMs})
+	c.JSON(http.StatusOK, gin.H{"updated": stepCount, "pinged": pinged, "tickMs": simTickMs})
+}
+
+// simulatePing records one simulated fix through the real ingest pipeline.
+//
+// The simulator used to write lat/lng/heading/last_seen straight onto the
+// vehicle row and stop there. The vehicle moved on the map and left no trace:
+// no ping in telemetry_timeseries, so no track, no trail, no trip detection and
+// no geofence transition. A simulated fleet therefore exercised none of the
+// features people actually use it to demo, and "the vehicle moves but its path
+// is never plotted" was the exact symptom that produced.
+//
+// Going through InsertPings → ApplyVehicleHotState → Hub.Publish → geofences —
+// the same four steps as a hardware tracker and a driver's phone — means the
+// registry row is still updated (ApplyVehicleHotState does it, in the same
+// transaction as the status-change event) and everything downstream of a real
+// device now works for a simulated one too.
+//
+// Reports whether the ping path ran; false means fall back to a direct write.
+func (w *Workflows) simulatePing(ctx context.Context, next models.Vehicle, ts time.Time) bool {
+	if w.IoTStore == nil {
+		return false
+	}
+	speed := next.Speed
+	heading := next.Heading
+	p := iot.Ping{
+		VehicleID: next.ID,
+		DeviceID:  nil, // no paired tracker: this fix was generated, not received
+		TS:        ts,
+		Lat:       next.Lat,
+		Lng:       next.Lng,
+		Heading:   &heading,
+		SpeedKmh:  &speed,
+		// Marked at the source. A simulated fix is indistinguishable from a real
+		// one once it is a row of numbers, and anyone reading this history later
+		// deserves to know which it was.
+		Raw: json.RawMessage(`{"source":"simulator"}`),
+	}
+	if _, err := w.IoTStore.InsertPings(ctx, []iot.Ping{p}); err != nil {
+		return false
+	}
+	if _, err := w.IoTStore.ApplyVehicleHotState(ctx, p); err != nil {
+		return false
+	}
+	if w.IoTHub != nil {
+		w.IoTHub.Publish(p)
+	}
+	_ = w.IoTStore.ApplyGeofenceTransitions(ctx, iot.ProcessGeofences(p))
+	return true
 }
 
 func stepVehicle(v models.Vehicle) models.Vehicle {
