@@ -144,6 +144,42 @@ func main() {
 	if runPurge {
 		ctxPurge, cancelPurge := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancelPurge()
+
+		// Partitions first, and before the drop below: this is what keeps a
+		// month existing before its first ping arrives. The table also has a
+		// DEFAULT partition, so a missed run is untidy rather than an outage —
+		// a failed INSERT would stop the live map too, since Pipeline.Ingest
+		// returns before the hot-state update.
+		// Whichever pool actually holds the pings. telemetryPool is nil in
+		// single-database mode — which is the deployed configuration — and
+		// gating on it would mean partition maintenance never ran at all,
+		// exactly where it is needed. Same fallback the store itself uses.
+		pingPool := telemetryPool
+		if pingPool == nil {
+			pingPool = operationalPool
+		}
+		if pingPool != nil {
+			if n, err := jobs.EnsureTelemetryPartitions(ctxPurge, pingPool); err != nil {
+				log.Printf("fleet-jobs partitions: %v (continuing; the DEFAULT partition still accepts writes)", err)
+			} else if n > 0 {
+				log.Printf("fleet-jobs partitions: %d monthly partitions present through %d months ahead", n, jobs.MonthsAhead)
+			}
+
+			// Drop whole months rather than DELETE rows where the table is
+			// partitioned. A DELETE on an append-only table is a long
+			// transaction leaving bloat for autovacuum on a database twenty-one
+			// schemas share; dropping a month is instant and leaves nothing.
+			cutoff := time.Now().UTC().AddDate(0, 0, -*purgeDays)
+			dropped, err := jobs.DropTelemetryPartitionsBefore(ctxPurge, pingPool, cutoff)
+			if err != nil {
+				log.Printf("fleet-jobs partition retention: %v", err)
+			} else if len(dropped) > 0 {
+				log.Printf("fleet-jobs partition retention: dropped %v (older than %d days)", dropped, *purgeDays)
+				// Those months are gone; the row delete below has nothing left
+				// to do for them and only scans what partitioning did not cover.
+			}
+		}
+
 		n, err := jobs.PurgeTelemetryPings(ctxPurge, iotStore, *purgeDays)
 		if err != nil {
 			log.Fatalf("purge: %v", err)
