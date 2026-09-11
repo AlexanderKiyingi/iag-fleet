@@ -64,11 +64,48 @@ BEGIN
     -- tidiness on a table holding the only copy of vehicle history.
     EXECUTE format('ALTER TABLE %I.telemetry_timeseries RENAME TO telemetry_timeseries_preparted', target_schema);
 
+    -- Renaming a table does NOT rename the things it owns. Its indexes and its
+    -- BIGSERIAL sequence keep their original names, so recreating
+    -- telemetry_timeseries below walks straight into them:
+    -- telemetry_timeseries_vehicle_ts_uidx already exists (SQLSTATE 42P07), and
+    -- the migration dies. On this service that is not a failed migration, it is
+    -- an outage — autoMigrate refuses to serve when a migration fails, so the
+    -- whole fleet API stays down until someone renames an index by hand.
+    FOR old_index IN
+        SELECT c.relname
+          FROM pg_index i
+          JOIN pg_class c ON c.oid = i.indexrelid
+          JOIN pg_class t ON t.oid = i.indrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+         WHERE t.relname = 'telemetry_timeseries_preparted'
+           AND n.nspname = target_schema
+    LOOP
+        -- left(…, 52) keeps the result inside the 63-character identifier limit;
+        -- the names in play are far shorter, so this only ever matters to a name
+        -- someone adds later.
+        EXECUTE format('ALTER INDEX %I.%I RENAME TO %I',
+                       target_schema, old_index, left(old_index, 52) || '_preparted');
+    END LOOP;
+
+    -- The sequence would not error — serial picks a free name, quietly landing
+    -- on telemetry_timeseries_id_seq1 — but then the canonical name belongs to
+    -- the dead table forever, which is a trap for whoever reads this next.
+    IF to_regclass(format('%I.telemetry_timeseries_id_seq', target_schema)) IS NOT NULL THEN
+        EXECUTE format(
+            'ALTER SEQUENCE %I.telemetry_timeseries_id_seq RENAME TO telemetry_timeseries_preparted_id_seq',
+            target_schema);
+    END IF;
+
     EXECUTE format($ddl$
         CREATE TABLE %I.telemetry_timeseries (
             id          BIGSERIAL NOT NULL,
             vehicle_id  TEXT NOT NULL,
-            device_id   BIGINT,
+            -- Carried over from 0010. A partitioned table can be the
+            -- referencing side of a foreign key (PG 12+), so dropping it here
+            -- would have silently traded a constraint for nothing: deleting a
+            -- device used to null out device_id, and without this it would
+            -- leave rows pointing at a device that no longer exists.
+            device_id   BIGINT REFERENCES iot_devices(id) ON DELETE SET NULL,
             ts          TIMESTAMPTZ NOT NULL,
             lat         DOUBLE PRECISION NOT NULL,
             lng         DOUBLE PRECISION NOT NULL,
