@@ -120,6 +120,89 @@ func TestIntegration_FleetTelemetryReports(t *testing.T) {
 	})
 }
 
+// Driver behaviour, against a run built to trip exactly one of each rule.
+//
+// The thresholds are the whole report: set them too low and a careful driver
+// gets flagged, the scorecard is argued with once, and nobody trusts it again.
+// So each is asserted against a fixture that sits clearly on one side of it.
+func TestIntegration_DriverBehaviourReport(t *testing.T) {
+	pool, cleanup := testdb.Pool(t)
+	defer cleanup()
+	ctx := context.Background()
+	repo := store.NewRepository(pool)
+	repo.AttachTelemetry(pool)
+	iotStore := iot.NewStore(pool)
+	gin.SetMode(gin.TestMode)
+	h := &Reports{Repo: repo}
+
+	v := integrationVehicle(testID("VEH-BEH"), "BEH-01")
+	if _, err := repo.Vehicles.Add(ctx, v); err != nil {
+		t.Fatalf("seed vehicle: %v", err)
+	}
+
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Minute)
+	sp := func(v float64) *float64 { return &v }
+	// 90 km/h is over the 80 limit; the drop to 20 over 5s is -14 km/h/s,
+	// past the -10 harsh threshold.
+	if _, err := iotStore.InsertPings(ctx, []iot.Ping{
+		{VehicleID: v.ID, TS: base, Lat: 0.30, Lng: 32.50, SpeedKmh: sp(90)},
+		{VehicleID: v.ID, TS: base.Add(5 * time.Second), Lat: 0.3005, Lng: 32.5005, SpeedKmh: sp(20)},
+		{VehicleID: v.ID, TS: base.Add(10 * time.Second), Lat: 0.3010, Lng: 32.5010, SpeedKmh: sp(90)},
+	}); err != nil {
+		t.Fatalf("insert pings: %v", err)
+	}
+
+	body := getReport(t, h.driverBehaviour, "/api/reports/driver-behaviour?days=1")
+	for _, raw := range body["vehicles"].([]any) {
+		row := raw.(map[string]any)
+		if row["vehicleId"] != v.ID {
+			continue
+		}
+		if row["maxSpeedKmh"].(float64) != 90 {
+			t.Fatalf("maxSpeedKmh = %v, want 90", row["maxSpeedKmh"])
+		}
+		if row["speedingFixes"].(float64) < 2 {
+			t.Fatalf("speedingFixes = %v, want the two fixes at 90 km/h", row["speedingFixes"])
+		}
+		if row["harshBraking"].(float64) < 1 {
+			t.Fatalf("harshBraking = %v, want the 90→20 drop counted", row["harshBraking"])
+		}
+		if row["harshAccel"].(float64) < 1 {
+			t.Fatalf("harshAccel = %v, want the 20→90 rise counted", row["harshAccel"])
+		}
+		// The caller must be told what the numbers mean before it ranks anyone.
+		if body["attribution"] == nil || body["thresholds"] == nil {
+			t.Fatal("response must carry its thresholds and its attribution caveat")
+		}
+		return
+	}
+	t.Fatal("vehicle missing from the driver behaviour report")
+}
+
+// A vehicle with no telemetry still appears, at zero — otherwise the scorecard
+// silently ranks only the drivers whose trackers happen to work.
+func TestIntegration_DriverBehaviourKeepsUntrackedVehicles(t *testing.T) {
+	pool, cleanup := testdb.Pool(t)
+	defer cleanup()
+	ctx := context.Background()
+	repo := store.NewRepository(pool)
+	repo.AttachTelemetry(pool)
+	gin.SetMode(gin.TestMode)
+	h := &Reports{Repo: repo}
+
+	dark := integrationVehicle(testID("VEH-BEH-DARK"), "BEH-02")
+	if _, err := repo.Vehicles.Add(ctx, dark); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	body := getReport(t, h.driverBehaviour, "/api/reports/driver-behaviour?days=1")
+	for _, raw := range body["vehicles"].([]any) {
+		if raw.(map[string]any)["vehicleId"] == dark.ID {
+			return
+		}
+	}
+	t.Fatal("a vehicle with no telemetry must still be listed")
+}
+
 func getReport(t *testing.T, handler gin.HandlerFunc, target string) map[string]any {
 	t.Helper()
 	rec := httptest.NewRecorder()
