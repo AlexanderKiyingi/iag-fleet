@@ -34,6 +34,7 @@ const (
 func (r *Reports) registerFleetReports(rg *gin.RouterGroup) {
 	rg.GET("/reports/telemetry-coverage", auth.RequireAnyFleetView(), r.telemetryCoverage)
 	rg.GET("/reports/utilisation", auth.RequireAnyFleetView(), r.utilisation)
+	rg.GET("/reports/driver-behaviour", auth.RequireAnyFleetView(), r.driverBehaviour)
 }
 
 // reportWindow reads ?days= with a sane bound.
@@ -300,5 +301,172 @@ SELECT v.id::text, COALESCE(v.plate,''),
 		"vehicles":     out,
 		"totalKm":      totalKm,
 		"totalMovingH": totalMoving,
+	})
+}
+
+// Driver behaviour thresholds.
+//
+// GPS speed is noisy — a fix every ten seconds is a sample, not a
+// speedometer — so these sit deliberately above the values a vehicle-bus
+// telematics unit would use. The cost of a threshold set too low is not a
+// slightly wrong number: it is a scorecard that flags a careful driver, gets
+// argued with once, and is never trusted again.
+const (
+	// Sustained speed above this counts as speeding. Uganda's national limit
+	// for goods vehicles is 80 km/h; this is deliberately the legal figure
+	// rather than a tuned one, so the report says something defensible.
+	reportSpeedingKmh = 80.0
+	// Change in speed per second treated as harsh. ~10 km/h/s is about 2.8
+	// m/s², firmly outside normal driving and beyond the range GPS jitter
+	// produces between two fixes.
+	reportHarshKmhPerSec = 10.0
+	// Consecutive fixes further apart than this say nothing about
+	// acceleration: the vehicle could have done anything in between.
+	reportHarshMaxGapSec = 30
+	// Night driving window, local time. Fatigue risk and, for a goods fleet,
+	// often a policy breach in itself.
+	reportNightFromHour = 22
+	reportNightToHour   = 5
+)
+
+type driverScoreRow struct {
+	VehicleID   string  `json:"vehicleId"`
+	Plate       string  `json:"plate"`
+	DriverID    string  `json:"driverId"`
+	DriverName  string  `json:"driverName"`
+	DistanceKm  float64 `json:"distanceKm"`
+	MaxSpeedKmh float64 `json:"maxSpeedKmh"`
+	// Fixes recorded above the speed limit, and the share of moving fixes they
+	// represent — a count alone punishes whoever drove furthest.
+	SpeedingFixes int     `json:"speedingFixes"`
+	SpeedingPct   float64 `json:"speedingPct"`
+	HarshBraking  int     `json:"harshBraking"`
+	HarshAccel    int     `json:"harshAccel"`
+	NightHours    float64 `json:"nightHours"`
+	// EventsPer100Km is what makes drivers comparable. Raw counts rank the
+	// busiest driver worst no matter how they drove.
+	EventsPer100Km float64 `json:"eventsPer100Km"`
+}
+
+// driverBehaviour scores how each vehicle was driven.
+//
+// Scored per vehicle and attributed to its currently assigned driver, which is
+// the honest limit of what the data supports: pings carry a vehicle, not a
+// person, and the vehicle→driver binding is current rather than historical. A
+// vehicle that changed hands mid-window attributes the whole window to
+// whoever holds it now, and the response says so rather than leaving the
+// caller to assume otherwise.
+func (r *Reports) driverBehaviour(c *gin.Context) {
+	ctx := c.Request.Context()
+	from, to, days := reportWindow(c, 7, 90)
+
+	pool := r.Repo.FuelEventsPool()
+	if pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "telemetry is not configured on this deployment"})
+		return
+	}
+
+	const q = `
+WITH steps AS (
+    SELECT vehicle_id, ts, lat, lng, COALESCE(speed_kmh, 0) AS speed,
+           ts  - lag(ts)  OVER w AS gap,
+           lat - lag(lat) OVER w AS dlat,
+           lng - lag(lng) OVER w AS dlng,
+           lag(lat) OVER w        AS plat,
+           COALESCE(speed_kmh,0) - lag(COALESCE(speed_kmh,0)) OVER w AS dspeed
+      FROM telemetry_timeseries
+     WHERE ts BETWEEN $1 AND $2
+       AND NOT (lat = 0 AND lng = 0)
+    WINDOW w AS (PARTITION BY vehicle_id ORDER BY ts)
+),
+scored AS (
+    SELECT vehicle_id, speed,
+           CASE WHEN gap IS NULL OR gap > make_interval(mins => $3) THEN 0
+                ELSE 111.32 * sqrt((dlat)^2 + (dlng * cos(radians((lat + plat)/2)))^2)
+           END AS hop_km,
+           (speed >= $4::float8) AS speeding,
+           (speed >= $5::float8) AS moving,
+           -- Acceleration only means something between two fixes close enough
+           -- together to describe the same manoeuvre.
+           CASE WHEN gap IS NOT NULL
+                 AND EXTRACT(EPOCH FROM gap) BETWEEN 1 AND $6::float8
+                 -- Cast before negating: unary minus on an untyped parameter
+                 -- is ambiguous to Postgres ("operator is not unique: - unknown").
+                 AND dspeed / EXTRACT(EPOCH FROM gap) <= -($7::float8) THEN 1 ELSE 0 END AS harsh_brake,
+           CASE WHEN gap IS NOT NULL
+                 AND EXTRACT(EPOCH FROM gap) BETWEEN 1 AND $6::float8
+                 AND dspeed / EXTRACT(EPOCH FROM gap) >= $7::float8 THEN 1 ELSE 0 END AS harsh_accel,
+           CASE WHEN gap IS NULL OR gap > make_interval(mins => $3) THEN 0
+                WHEN EXTRACT(HOUR FROM ts) >= $8::int OR EXTRACT(HOUR FROM ts) < $9::int
+                     THEN EXTRACT(EPOCH FROM gap)
+                ELSE 0 END AS night_s
+      FROM steps
+)
+SELECT v.id::text, COALESCE(v.plate,''), COALESCE(v.driver_id::text,''), COALESCE(d.name,''),
+       COALESCE(SUM(s.hop_km), 0),
+       COALESCE(MAX(s.speed), 0),
+       COALESCE(SUM(CASE WHEN s.speeding THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN s.moving THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(s.harsh_brake), 0),
+       COALESCE(SUM(s.harsh_accel), 0),
+       COALESCE(SUM(s.night_s), 0) / 3600.0
+  FROM vehicles v
+  LEFT JOIN scored s ON s.vehicle_id = v.id::text
+  LEFT JOIN drivers d ON d.id = v.driver_id
+ GROUP BY v.id, v.plate, v.driver_id, d.name
+ ORDER BY COALESCE(SUM(s.hop_km), 0) DESC, v.plate ASC`
+
+	rows, err := pool.Query(ctx, q,
+		from, to, reportMaxGapMinutes,
+		reportSpeedingKmh, reportMovingKmh,
+		reportHarshMaxGapSec, reportHarshKmhPerSec,
+		reportNightFromHour, reportNightToHour)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	out := []driverScoreRow{}
+	for rows.Next() {
+		var row driverScoreRow
+		var movingFixes int
+		if err := rows.Scan(&row.VehicleID, &row.Plate, &row.DriverID, &row.DriverName,
+			&row.DistanceKm, &row.MaxSpeedKmh, &row.SpeedingFixes, &movingFixes,
+			&row.HarshBraking, &row.HarshAccel, &row.NightHours); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if movingFixes > 0 {
+			row.SpeedingPct = float64(row.SpeedingFixes) / float64(movingFixes) * 100
+		}
+		// Rate, not count. Below a few kilometres the ratio is noise, so it is
+		// left at zero rather than reporting an enormous number from one event
+		// on a short trip.
+		if row.DistanceKm >= 5 {
+			row.EventsPer100Km = float64(row.HarshBraking+row.HarshAccel) / row.DistanceKm * 100
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"generatedAt": time.Now().UTC().Format(time.RFC3339),
+		"windowDays":  days,
+		"windowStart": from.Format(time.RFC3339),
+		"windowEnd":   to.Format(time.RFC3339),
+		"thresholds": gin.H{
+			"speedingKmh":    reportSpeedingKmh,
+			"harshKmhPerSec": reportHarshKmhPerSec,
+			"nightFromHour":  reportNightFromHour,
+			"nightToHour":    reportNightToHour,
+		},
+		// Said in the payload, not just in a comment: pings carry a vehicle,
+		// not a person, and the binding is current rather than historical.
+		"attribution": "Scored per vehicle and attributed to its currently assigned driver. A vehicle that changed driver during the window attributes the whole window to the current one.",
+		"vehicles":    out,
 	})
 }
