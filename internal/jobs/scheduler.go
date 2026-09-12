@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"context"
@@ -11,51 +11,54 @@ import (
 
 	"github.com/iag/fleet-iot/iot"
 	"github.com/iag/fleet-tool/backend/internal/events"
-	"github.com/iag/fleet-tool/backend/internal/jobs"
 	"github.com/iag/fleet-tool/backend/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // schedulerConfig carries the tunables the one-shot flags already expose, so
 // --schedule reuses the same defaults.
-type schedulerConfig struct {
-	purgeDays    int
-	linkDays     int
-	pmWithinDays int
-	pmWithinKm   float64
+type SchedulerConfig struct {
+	PurgeDays    int
+	LinkDays     int
+	PmWithinDays int
+	PmWithinKm   float64
 }
 
 // runSchedulerMode runs the maintenance jobs on fixed cadences until SIGTERM/
 // SIGINT. Deploy it as a single long-lived worker (one replica) alongside the
 // API — it is the periodic janitor that turns the live ping stream into rolled-
 // up history, retires stale rows, and ages out statuses.
-func runSchedulerMode(operationalPool, telemetryPool *pgxpool.Pool, iotStore *iot.Store, eventBus *events.Bus, cfg schedulerConfig) {
+// RunSchedulerMode is the long-lived worker: it installs its own SIGTERM
+// handler and blocks. cmd/fleet-jobs --schedule is the only caller; anything
+// embedding the scheduler in another process wants RunScheduler, which takes a
+// context that process already owns.
+func RunSchedulerMode(operationalPool, telemetryPool *pgxpool.Pool, iotStore *iot.Store, eventBus *events.Bus, cfg SchedulerConfig) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	d := schedulerDeps{
-		iotStore:     iotStore,
-		eventBus:     eventBus,
-		fuelDB:       store.FuelDB{Operational: operationalPool, Telemetry: telemetryPool},
-		repo:         store.NewRepository(operationalPool),
-		purgeDays:    cfg.purgeDays,
-		linkDays:     cfg.linkDays,
-		pmWithinDays: cfg.pmWithinDays,
-		pmWithinKm:   cfg.pmWithinKm,
+	d := SchedulerDeps{
+		IotStore:     iotStore,
+		EventBus:     eventBus,
+		FuelDB:       store.FuelDB{Operational: operationalPool, Telemetry: telemetryPool},
+		Repo:         store.NewRepository(operationalPool),
+		PurgeDays:    cfg.PurgeDays,
+		LinkDays:     cfg.LinkDays,
+		PmWithinDays: cfg.PmWithinDays,
+		PmWithinKm:   cfg.PmWithinKm,
 	}
-	runScheduler(ctx, d)
+	RunScheduler(ctx, d)
 }
 
-type schedulerDeps struct {
-	iotStore *iot.Store
-	eventBus *events.Bus
-	fuelDB   store.FuelDB
-	repo     *store.Repository
+type SchedulerDeps struct {
+	IotStore *iot.Store
+	EventBus *events.Bus
+	FuelDB   store.FuelDB
+	Repo     *store.Repository
 
-	purgeDays    int
-	linkDays     int
-	pmWithinDays int
-	pmWithinKm   float64
+	PurgeDays    int
+	LinkDays     int
+	PmWithinDays int
+	PmWithinKm   float64
 }
 
 // scheduledTask is one job plus its cadence. initialDelay staggers the first run
@@ -99,7 +102,40 @@ func runTasks(ctx context.Context, tasks []scheduledTask) {
 	wg.Wait()
 }
 
-func runScheduler(ctx context.Context, d schedulerDeps) {
+// Defaults for the scheduler's tunables.
+//
+// These live here rather than only in cmd/fleet-jobs's flag definitions
+// because a zero value is not a harmless "unset" for any of them. The flag
+// parser refuses --purge-days below 1; a struct literal has no such guard, and
+// PurgeTelemetryPings clamps 0 up to 1 — so a caller that simply omitted the
+// field would retain ONE DAY of telemetry and delete the rest on the first
+// nightly run. Any embedder that under-specifies now gets the same retention
+// the worker has always had.
+const (
+	DefaultPurgeDays = 365
+	DefaultLinkDays  = 90
+)
+
+// withDefaults fills in anything the caller left at zero.
+func (d SchedulerDeps) withDefaults() SchedulerDeps {
+	if d.PurgeDays < 1 {
+		d.PurgeDays = DefaultPurgeDays
+	}
+	if d.LinkDays < 1 {
+		d.LinkDays = DefaultLinkDays
+	}
+	if d.PmWithinDays < 1 {
+		d.PmWithinDays = DefaultPMWithinDays
+	}
+	if d.PmWithinKm <= 0 {
+		d.PmWithinKm = DefaultPMWithinKm
+	}
+	return d
+}
+
+// RunScheduler runs the maintenance jobs on their cadences until ctx is done.
+func RunScheduler(ctx context.Context, d SchedulerDeps) {
+	d = d.withDefaults()
 	stale := envDuration("FLEET_SCHED_STALE_INTERVAL", time.Hour)
 	daily := envDuration("FLEET_SCHED_DAILY_INTERVAL", 24*time.Hour)
 
@@ -118,10 +154,10 @@ func runScheduler(ctx context.Context, d schedulerDeps) {
 	log.Print("fleet-jobs scheduler: stopped")
 }
 
-func (d schedulerDeps) runMarkStale(ctx context.Context) {
+func (d SchedulerDeps) runMarkStale(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	n, err := jobs.MarkStaleVehiclesOffline(ctx, d.iotStore)
+	n, err := MarkStaleVehiclesOffline(ctx, d.IotStore)
 	if err != nil {
 		log.Printf("fleet-jobs scheduler: mark-stale: %v", err)
 		return
@@ -131,8 +167,8 @@ func (d schedulerDeps) runMarkStale(ctx context.Context) {
 	}
 }
 
-func (d schedulerDeps) runTelemetryDaily(ctx context.Context) {
-	from, to, err := jobs.ResolveAggregateRange("", "")
+func (d SchedulerDeps) runTelemetryDaily(ctx context.Context) {
+	from, to, err := ResolveAggregateRange("", "")
 	if err != nil {
 		log.Printf("fleet-jobs scheduler: aggregate range: %v", err)
 		return
@@ -141,20 +177,20 @@ func (d schedulerDeps) runTelemetryDaily(ctx context.Context) {
 	aggCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 
-	if written, ev, failed, err := jobs.AggregateTelemetry(aggCtx, d.iotStore, d.eventBus, d.fuelDB, from, to, ""); err != nil {
+	if written, ev, failed, err := AggregateTelemetry(aggCtx, d.IotStore, d.EventBus, d.FuelDB, from, to, ""); err != nil {
 		log.Printf("fleet-jobs scheduler: aggregate: %v", err)
 	} else {
 		log.Printf("fleet-jobs scheduler: aggregate %s: %d daily rows, %d fuel events, %d failed",
-			from.Format(jobs.DayLayout), written, ev, failed)
+			from.Format(DayLayout), written, ev, failed)
 	}
 
-	if res, err := jobs.ReconcileFuel(aggCtx, d.fuelDB, d.linkDays, ""); err != nil {
+	if res, err := ReconcileFuel(aggCtx, d.FuelDB, d.LinkDays, ""); err != nil {
 		log.Printf("fleet-jobs scheduler: reconcile-fuel: %v", err)
 	} else {
-		log.Print(jobs.ReconcileFuelSummary(res, nil))
+		log.Print(ReconcileFuelSummary(res, nil))
 	}
 
-	if n, err := jobs.DetectTripsFromTelemetry(aggCtx, d.iotStore, d.repo, from, to); err != nil {
+	if n, err := DetectTripsFromTelemetry(aggCtx, d.IotStore, d.Repo, from, to); err != nil {
 		log.Printf("fleet-jobs scheduler: detect-trips: %v", err)
 	} else if n > 0 {
 		log.Printf("fleet-jobs scheduler: detect-trips created %d trips", n)
@@ -162,14 +198,14 @@ func (d schedulerDeps) runTelemetryDaily(ctx context.Context) {
 
 	purgeCtx, cancelPurge := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancelPurge()
-	if n, err := jobs.PurgeTelemetryPings(purgeCtx, d.iotStore, d.purgeDays); err != nil {
+	if n, err := PurgeTelemetryPings(purgeCtx, d.IotStore, d.PurgeDays); err != nil {
 		log.Printf("fleet-jobs scheduler: purge: %v", err)
 	} else if n > 0 {
-		log.Printf("fleet-jobs scheduler: purge deleted %d pings (retain %d days)", n, d.purgeDays)
+		log.Printf("fleet-jobs scheduler: purge deleted %d pings (retain %d days)", n, d.PurgeDays)
 	}
 }
 
-func (d schedulerDeps) runFleetMaintenance(ctx context.Context) {
+func (d SchedulerDeps) runFleetMaintenance(ctx context.Context) {
 	withTimeout := func(fn func(context.Context) (int, error), label string) {
 		c, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
@@ -180,12 +216,12 @@ func (d schedulerDeps) runFleetMaintenance(ctx context.Context) {
 		}
 	}
 
-	withTimeout(func(c context.Context) (int, error) { return jobs.RecomputeComplianceStatuses(c, d.repo) }, "recompute-compliance")
-	withTimeout(func(c context.Context) (int, error) { return jobs.MarkOverdueMaintenance(c, d.repo) }, "mark-mx-overdue")
+	withTimeout(func(c context.Context) (int, error) { return RecomputeComplianceStatuses(c, d.Repo) }, "recompute-compliance")
+	withTimeout(func(c context.Context) (int, error) { return MarkOverdueMaintenance(c, d.Repo) }, "mark-mx-overdue")
 
 	c, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	if res, err := jobs.EvaluatePM(c, d.repo, d.pmWithinDays, d.pmWithinKm); err != nil {
+	if res, err := EvaluatePM(c, d.Repo, d.PmWithinDays, d.PmWithinKm); err != nil {
 		log.Printf("fleet-jobs scheduler: evaluate-pm: %v", err)
 	} else if res.Created > 0 {
 		log.Printf("fleet-jobs scheduler: evaluate-pm created %d work orders (checked %d, skipped %d)",

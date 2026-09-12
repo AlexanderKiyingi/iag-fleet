@@ -207,6 +207,26 @@ func main() {
 
 	go platformregister.PermissionsLoop(context.Background(), cfg)
 
+	// The maintenance jobs, optionally in this process.
+	//
+	// They are meant to run as a separate long-lived worker (fleet-jobs
+	// --schedule). That worker was never deployed: telemetry_daily held zero
+	// rows, so no rollups existed, no retention ran and no partitions were
+	// pre-created, while raw pings accumulated. Standing up a worker is a
+	// deployment change; this is the same code path with nothing to provision.
+	//
+	// Off unless FLEET_RUN_JOBS_IN_PROCESS is set, so a deployment that already
+	// runs the worker cannot end up running the jobs twice. Where it is on, an
+	// advisory lock means exactly one replica runs them.
+	if os.Getenv("FLEET_RUN_JOBS_IN_PROCESS") == "1" || os.Getenv("FLEET_RUN_JOBS_IN_PROCESS") == "true" {
+		jobs.StartInProcess(context.Background(), operationalPool, jobs.SchedulerDeps{
+			IotStore: iotStore,
+			EventBus: eventBus,
+			FuelDB:   store.FuelDB{Operational: operationalPool, Telemetry: telemetryPool},
+			Repo:     repo,
+		})
+	}
+
 	r := router.New(repo, router.Options{
 		Config:              cfg,
 		AllowedOrigin:       cfg.CORSOrigin,
