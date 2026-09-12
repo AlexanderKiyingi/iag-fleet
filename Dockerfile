@@ -36,6 +36,14 @@ FROM base AS fleet-iot-clone
 # edge/Fleet_IoT and so builds green against the working tree, which is exactly
 # how a stale pin gets missed locally. If you changed fleet and fleet-iot
 # together, bump this in the same commit.
+# Bumped to a967f20: geofence rules and vehicle assignment. New symbols
+# (ParseGeofenceRule, SetGeofenceVehicles, RenameGeofencePOI) so a stale pin
+# fails at compile time — but the BEHAVIOUR change is the one that matters:
+# ProcessGeofences now skips fences not assigned to the pinging vehicle, and
+# only raises an event when the fence's rule says the crossing is a breach.
+# Left behind, migration 0056 would add the columns and the gateway would keep
+# evaluating every fence for every vehicle, so assignments would appear to be
+# saved and change nothing.
 # Bumped to cbbea4e: geofence management. ListGeofencePOIs / UpsertGeofencePOI /
 # DeleteGeofencePOI are new SYMBOLS, so a stale pin fails at compile time rather
 # than silently — but the same commit also changes BEHAVIOUR that a stale pin
@@ -90,7 +98,7 @@ FROM base AS fleet-iot-clone
 # Still fatal: a table unreachable on this connection while existing in another
 # schema. That is the original bug and it is distinguishable, because the name
 # does not resolve at all.
-ARG FLEET_IOT_REF=cbbea4e
+ARG FLEET_IOT_REF=a967f20
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \

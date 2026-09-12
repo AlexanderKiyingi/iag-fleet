@@ -850,8 +850,14 @@ const maxDailyTelemetryRange = 365 * 24 * time.Hour
 // fences, so the read shape below has no room for the flag.
 type geofencePOIRecord struct {
 	geofencePOI
-	IsActive  bool      `json:"isActive"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	IsActive bool `json:"isActive"`
+	// Rule says what a crossing means: watch | stay_inside | no_entry.
+	Rule string `json:"rule"`
+	// VehicleIDs scopes the fence. EMPTY MEANS EVERY VEHICLE, not none — the
+	// client has to render that as "all vehicles" rather than "unassigned", or
+	// an operator reads a fully-armed fence as a switched-off one.
+	VehicleIDs []string  `json:"vehicleIds"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // geofencePOIBody is what a create or edit sends.
@@ -867,6 +873,12 @@ type geofencePOIBody struct {
 	Type     *string  `json:"type"`
 	RadiusKm *float64 `json:"radiusKm"`
 	IsActive *bool    `json:"isActive"`
+	Rule     *string  `json:"rule"`
+	// Pointer to a slice so "not mentioned" stays distinct from "cleared".
+	// Sending [] returns the fence to every vehicle; omitting the field leaves
+	// the assignments alone. Collapsing those two would silently un-scope a
+	// fence on any edit that only moved it.
+	VehicleIDs *[]string `json:"vehicleIds"`
 }
 
 // upsertGeofencePOI creates a fence (POST) or edits one (PATCH /:name).
@@ -926,10 +938,33 @@ func (h *IoT) upsertGeofencePOI(c *gin.Context) {
 	if body.IsActive != nil {
 		current.IsActive = *body.IsActive
 	}
+	if body.Rule != nil {
+		current.Rule = iot.ParseGeofenceRule(*body.Rule)
+	}
 
 	if msg := validateGeofencePOI(current); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
+	}
+
+	// Rename FIRST, and as an UPDATE. geofence_vehicles references the name
+	// ON UPDATE CASCADE, so moving the row carries its assignments; the
+	// create-plus-delete this used to do would have dropped every vehicle
+	// scoped to the fence and silently returned it to fleet-wide.
+	if priorName != "" && priorName != current.Name {
+		renamed, err := h.Store.RenameGeofencePOI(ctx, priorName, current.Name)
+		if err != nil {
+			if msg, ok := badRequestFromPg(err); ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !renamed {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no geofence named " + priorName})
+			return
+		}
 	}
 
 	if err := h.Store.UpsertGeofencePOI(ctx, current); err != nil {
@@ -943,13 +978,20 @@ func (h *IoT) upsertGeofencePOI(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// A rename leaves the old row behind, and two fences where the operator
-	// meant one is worse than the rename failing.
-	if priorName != "" && priorName != current.Name {
-		if _, err := h.Store.DeleteGeofencePOI(ctx, priorName); err != nil {
+	// Assignments are replaced only when the caller mentioned them. Omitting
+	// the field leaves the scope alone; sending [] returns the fence to every
+	// vehicle. Treating those the same would un-scope a fence on any edit that
+	// merely moved it.
+	if body.VehicleIDs != nil {
+		if err := h.Store.SetGeofenceVehicles(ctx, current.Name, *body.VehicleIDs); err != nil {
+			if msg, ok := badRequestFromPg(err); ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		current.VehicleIDs = *body.VehicleIDs
 	}
 
 	status := http.StatusOK
@@ -961,8 +1003,10 @@ func (h *IoT) upsertGeofencePOI(c *gin.Context) {
 			Name: current.Name, Lat: current.Lat, Lng: current.Lng,
 			Type: current.Type, RadiusKm: current.RadiusKm,
 		},
-		IsActive:  current.IsActive,
-		UpdatedAt: time.Now().UTC(),
+		IsActive:   current.IsActive,
+		Rule:       string(iot.ParseGeofenceRule(string(current.Rule))),
+		VehicleIDs: append([]string{}, current.VehicleIDs...),
+		UpdatedAt:  time.Now().UTC(),
 	})
 }
 
@@ -1045,7 +1089,12 @@ func (h *IoT) geofencePOIs(c *gin.Context) {
 			out = append(out, geofencePOIRecord{
 				geofencePOI: geofencePOI{Name: p.Name, Lat: p.Lat, Lng: p.Lng, Type: p.Type, RadiusKm: p.RadiusKm},
 				IsActive:    p.IsActive,
-				UpdatedAt:   p.UpdatedAt,
+				Rule:        string(p.Rule),
+				// Never nil: an omitted JSON array and an empty one read
+				// differently to a client, and empty is the meaningful state
+				// here — it says the fence watches every vehicle.
+				VehicleIDs: append([]string{}, p.VehicleIDs...),
+				UpdatedAt:  p.UpdatedAt,
 			})
 		}
 		c.JSON(http.StatusOK, gin.H{"pois": out, "count": len(out)})
