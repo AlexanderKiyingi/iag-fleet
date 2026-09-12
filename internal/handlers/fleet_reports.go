@@ -384,18 +384,20 @@ scored AS (
            CASE WHEN gap IS NULL OR gap > make_interval(mins => $3) THEN 0
                 ELSE 111.32 * sqrt((dlat)^2 + (dlng * cos(radians((lat + plat)/2)))^2)
            END AS hop_km,
-           (speed >= $4) AS speeding,
-           (speed >= $5) AS moving,
+           (speed >= $4::float8) AS speeding,
+           (speed >= $5::float8) AS moving,
            -- Acceleration only means something between two fixes close enough
            -- together to describe the same manoeuvre.
            CASE WHEN gap IS NOT NULL
-                 AND EXTRACT(EPOCH FROM gap) BETWEEN 1 AND $6
-                 AND dspeed / EXTRACT(EPOCH FROM gap) <= -$7 THEN 1 ELSE 0 END AS harsh_brake,
+                 AND EXTRACT(EPOCH FROM gap) BETWEEN 1 AND $6::float8
+                 -- Cast before negating: unary minus on an untyped parameter
+                 -- is ambiguous to Postgres ("operator is not unique: - unknown").
+                 AND dspeed / EXTRACT(EPOCH FROM gap) <= -($7::float8) THEN 1 ELSE 0 END AS harsh_brake,
            CASE WHEN gap IS NOT NULL
-                 AND EXTRACT(EPOCH FROM gap) BETWEEN 1 AND $6
-                 AND dspeed / EXTRACT(EPOCH FROM gap) >= $7 THEN 1 ELSE 0 END AS harsh_accel,
+                 AND EXTRACT(EPOCH FROM gap) BETWEEN 1 AND $6::float8
+                 AND dspeed / EXTRACT(EPOCH FROM gap) >= $7::float8 THEN 1 ELSE 0 END AS harsh_accel,
            CASE WHEN gap IS NULL OR gap > make_interval(mins => $3) THEN 0
-                WHEN EXTRACT(HOUR FROM ts) >= $8 OR EXTRACT(HOUR FROM ts) < $9
+                WHEN EXTRACT(HOUR FROM ts) >= $8::int OR EXTRACT(HOUR FROM ts) < $9::int
                      THEN EXTRACT(EPOCH FROM gap)
                 ELSE 0 END AS night_s
       FROM steps
