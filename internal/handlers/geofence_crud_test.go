@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"testing"
 
 	"github.com/iag/fleet-iot/iot"
+	fleetstore "github.com/iag/fleet-tool/backend/internal/store"
+	"github.com/iag/fleet-tool/backend/internal/testdb"
 )
 
 // The rules a fence has to satisfy before it is worth storing.
@@ -67,4 +70,113 @@ func TestValidateGeofencePOIBoundaries(t *testing.T) {
 			t.Fatalf("%s rejected: %s", p.Name, msg)
 		}
 	}
+}
+
+// A rename must not quietly un-scope the fence.
+//
+// The handler used to rename by creating the new row and deleting the old one.
+// geofence_vehicles references the name ON DELETE CASCADE, so that sequence
+// dropped every vehicle assigned to the fence — and since no rows means EVERY
+// vehicle, the fence came back fleet-wide. Renaming "Client A Depot" would have
+// silently started raising arrivals for all 37 trucks.
+func TestIntegration_GeofenceRenameKeepsAssignments(t *testing.T) {
+	pool, cleanup := testdb.Pool(t)
+	defer cleanup()
+	ctx := context.Background()
+	store := iot.NewStore(pool)
+
+	v := integrationVehicle(testID("VEH-GEO"), "GEO-01")
+	repo := fleetstore.NewRepository(pool)
+	if _, err := repo.Vehicles.Add(ctx, v); err != nil {
+		t.Fatalf("seed vehicle: %v", err)
+	}
+
+	fence := iot.GeofencePOIRecord{
+		GeofencePOI: iot.GeofencePOI{
+			Name: testID("FENCE-A"), Lat: 0.32, Lng: 32.58, Type: "site", RadiusKm: 0.5,
+			Rule: iot.RuleStayInside,
+		},
+		IsActive: true,
+	}
+	if err := store.UpsertGeofencePOI(ctx, fence); err != nil {
+		t.Fatalf("create fence: %v", err)
+	}
+	if err := store.SetGeofenceVehicles(ctx, fence.Name, []string{v.ID}); err != nil {
+		t.Fatalf("assign vehicle: %v", err)
+	}
+
+	renamedTo := testID("FENCE-B")
+	ok, err := store.RenameGeofencePOI(ctx, fence.Name, renamedTo)
+	if err != nil || !ok {
+		t.Fatalf("rename: ok=%v err=%v", ok, err)
+	}
+
+	all, err := store.ListGeofencePOIs(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var got *iot.GeofencePOIRecord
+	for i := range all {
+		if all[i].Name == renamedTo {
+			got = &all[i]
+		}
+		if all[i].Name == fence.Name {
+			t.Fatal("the old name still exists — rename left a duplicate fence")
+		}
+	}
+	if got == nil {
+		t.Fatalf("renamed fence %q not found", renamedTo)
+	}
+	if len(got.VehicleIDs) != 1 || got.VehicleIDs[0] != v.ID {
+		t.Fatalf("assignments after rename = %v, want [%s] — the fence silently went fleet-wide",
+			got.VehicleIDs, v.ID)
+	}
+	// The rule has to survive too, or a restricted zone quietly becomes a
+	// fence that merely logs.
+	if got.Rule != iot.RuleStayInside {
+		t.Fatalf("rule after rename = %q, want %q", got.Rule, iot.RuleStayInside)
+	}
+}
+
+// Clearing the scope returns the fence to every vehicle, which is a meaningful
+// state rather than an empty one.
+func TestIntegration_GeofenceClearingAssignmentsGoesFleetWide(t *testing.T) {
+	pool, cleanup := testdb.Pool(t)
+	defer cleanup()
+	ctx := context.Background()
+	store := iot.NewStore(pool)
+	repo := fleetstore.NewRepository(pool)
+
+	v := integrationVehicle(testID("VEH-GEO2"), "GEO-02")
+	if _, err := repo.Vehicles.Add(ctx, v); err != nil {
+		t.Fatalf("seed vehicle: %v", err)
+	}
+	name := testID("FENCE-C")
+	if err := store.UpsertGeofencePOI(ctx, iot.GeofencePOIRecord{
+		GeofencePOI: iot.GeofencePOI{Name: name, Lat: 0.32, Lng: 32.58, Type: "site", RadiusKm: 0.5},
+		IsActive:    true,
+	}); err != nil {
+		t.Fatalf("create fence: %v", err)
+	}
+	if err := store.SetGeofenceVehicles(ctx, name, []string{v.ID}); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	if err := store.SetGeofenceVehicles(ctx, name, nil); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+
+	all, _ := store.ListGeofencePOIs(ctx)
+	for _, p := range all {
+		if p.Name != name {
+			continue
+		}
+		if len(p.VehicleIDs) != 0 {
+			t.Fatalf("assignments = %v, want none", p.VehicleIDs)
+		}
+		if !p.AppliesTo("any-vehicle-at-all") {
+			t.Fatal("a fence with no assignments must apply to every vehicle")
+		}
+		return
+	}
+	t.Fatalf("fence %q not found", name)
 }
