@@ -96,11 +96,11 @@ func main() {
 	// Long-lived worker mode: schedule every job on its cadence and block until
 	// SIGTERM. One replica owns this — do not run it on every API instance.
 	if *doSchedule {
-		runSchedulerMode(operationalPool, telemetryPool, iotStore, eventBus, schedulerConfig{
-			purgeDays:    *purgeDays,
-			linkDays:     *linkDays,
-			pmWithinDays: *pmWithinDays,
-			pmWithinKm:   *pmWithinKm,
+		jobs.RunSchedulerMode(operationalPool, telemetryPool, iotStore, eventBus, jobs.SchedulerConfig{
+			PurgeDays:    *purgeDays,
+			LinkDays:     *linkDays,
+			PmWithinDays: *pmWithinDays,
+			PmWithinKm:   *pmWithinKm,
 		})
 		return
 	}

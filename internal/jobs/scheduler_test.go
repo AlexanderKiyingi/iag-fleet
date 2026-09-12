@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"context"
@@ -88,5 +88,35 @@ func TestEnvDurationDefaultAndOverride(t *testing.T) {
 	t.Setenv("FLEET_SCHED_TEST_INTERVAL", "garbage")
 	if got := envDuration("FLEET_SCHED_TEST_INTERVAL", time.Hour); got != time.Hour {
 		t.Fatalf("invalid value should fall back to default, got %s", got)
+	}
+}
+
+// Nobody should be able to configure a one-day retention by omission.
+//
+// cmd/fleet-jobs rejects --purge-days below 1, but a struct literal has no such
+// guard, and PurgeTelemetryPings clamps 0 up to 1 — so a caller that simply did
+// not set the field would keep ONE DAY of telemetry and delete the rest on the
+// first nightly run. This is the whole reason the defaults live in the package.
+func TestSchedulerDepsDefaults(t *testing.T) {
+	got := SchedulerDeps{}.withDefaults()
+	if got.PurgeDays != DefaultPurgeDays {
+		t.Fatalf("PurgeDays = %d, want %d — an unset retention must not mean one day",
+			got.PurgeDays, DefaultPurgeDays)
+	}
+	if got.LinkDays != DefaultLinkDays {
+		t.Fatalf("LinkDays = %d, want %d", got.LinkDays, DefaultLinkDays)
+	}
+	if got.PmWithinDays != DefaultPMWithinDays || got.PmWithinKm != DefaultPMWithinKm {
+		t.Fatalf("PM lookahead = %d days / %v km, want %d / %v",
+			got.PmWithinDays, got.PmWithinKm, DefaultPMWithinDays, DefaultPMWithinKm)
+	}
+}
+
+// An explicit value is never overridden — the defaults fill gaps, they do not
+// impose policy on a caller that stated one.
+func TestSchedulerDepsKeepsExplicitValues(t *testing.T) {
+	got := SchedulerDeps{PurgeDays: 30, LinkDays: 7, PmWithinDays: 3, PmWithinKm: 250}.withDefaults()
+	if got.PurgeDays != 30 || got.LinkDays != 7 || got.PmWithinDays != 3 || got.PmWithinKm != 250 {
+		t.Fatalf("explicit values were overwritten: %+v", got)
 	}
 }
