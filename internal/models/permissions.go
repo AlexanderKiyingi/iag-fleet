@@ -24,6 +24,10 @@ var crudEntities = []string{
 	"inspection_template", "vehicle_inspection", "pm_schedule",
 	// The driver–vehicle authorisation matrix (FR-DRV-04).
 	"vehicle_category", "permit_class", "permit_authorisation",
+	// Operations records (0057) and the carrier master.
+	"weighbridge_ticket", "vehicle_diagnostic", "driver_hos_log",
+	"driver_safety_score", "fuel_card_reconciliation", "service_reminder",
+	"emissions_entry", "route_eta", "carrier", "trip_pod",
 }
 
 var workflowPermissions = []PermissionDescriptor{
