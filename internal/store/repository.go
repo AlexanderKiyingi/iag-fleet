@@ -61,6 +61,18 @@ type Repository struct {
 	Inspections         *Collection[models.VehicleInspection, *models.VehicleInspection]
 	PMSchedules         *Collection[models.PMSchedule, *models.PMSchedule]
 
+	// Operations records (0057): the forms the frontend ships that had no
+	// table here, plus the carrier master. See models/operations.go.
+	WeighbridgeTickets      *Collection[models.WeighbridgeTicket, *models.WeighbridgeTicket]
+	VehicleDiagnostics      *Collection[models.VehicleDiagnostic, *models.VehicleDiagnostic]
+	DriverHOSLogs           *Collection[models.DriverHOSLog, *models.DriverHOSLog]
+	DriverSafetyScores      *Collection[models.DriverSafetyScore, *models.DriverSafetyScore]
+	FuelCardReconciliations *Collection[models.FuelCardReconciliation, *models.FuelCardReconciliation]
+	ServiceReminders        *Collection[models.ServiceReminder, *models.ServiceReminder]
+	EmissionsEntries        *Collection[models.EmissionsEntry, *models.EmissionsEntry]
+	RouteETAs               *Collection[models.RouteETA, *models.RouteETA]
+	Carriers                *Collection[models.Carrier, *models.Carrier]
+
 	// Notifications is the per-user signal log surfaced by the bell.
 	// Doesn't follow the generic Collection pattern because every read /
 	// write is implicitly user-scoped.
@@ -99,6 +111,16 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 		InspectionTemplates: NewCollection[models.InspectionTemplate, *models.InspectionTemplate](pool, "inspection_templates"),
 		Inspections:         NewCollection[models.VehicleInspection, *models.VehicleInspection](pool, "vehicle_inspections"),
 		PMSchedules:         NewCollection[models.PMSchedule, *models.PMSchedule](pool, "pm_schedules"),
+
+		WeighbridgeTickets:      NewCollection[models.WeighbridgeTicket, *models.WeighbridgeTicket](pool, "weighbridge_tickets"),
+		VehicleDiagnostics:      NewCollection[models.VehicleDiagnostic, *models.VehicleDiagnostic](pool, "vehicle_diagnostics"),
+		DriverHOSLogs:           NewCollection[models.DriverHOSLog, *models.DriverHOSLog](pool, "driver_hos_logs"),
+		DriverSafetyScores:      NewCollection[models.DriverSafetyScore, *models.DriverSafetyScore](pool, "driver_safety_scores"),
+		FuelCardReconciliations: NewCollection[models.FuelCardReconciliation, *models.FuelCardReconciliation](pool, "fuel_card_reconciliations"),
+		ServiceReminders:        NewCollection[models.ServiceReminder, *models.ServiceReminder](pool, "service_reminders"),
+		EmissionsEntries:        NewCollection[models.EmissionsEntry, *models.EmissionsEntry](pool, "emissions_entries"),
+		RouteETAs:               NewCollection[models.RouteETA, *models.RouteETA](pool, "route_etas"),
+		Carriers:                NewCollection[models.Carrier, *models.Carrier](pool, "carriers"),
 
 		Notifications: &NotificationsStore{pool: pool},
 		UserProfiles:  &UserProfilesStore{pool: pool},
@@ -388,6 +410,6 @@ func (r *Repository) SchemaSpecs() []ColumnSpec {
 		r.PermitAuthorisations.Spec(),
 		r.InspectionTemplates.Spec(),
 		r.Inspections.Spec(),
-		r.PMSchedules.Spec(),
+		r.PMSchedules.Spec(),		r.WeighbridgeTickets.Spec(),		r.VehicleDiagnostics.Spec(),		r.DriverHOSLogs.Spec(),		r.DriverSafetyScores.Spec(),		r.FuelCardReconciliations.Spec(),		r.ServiceReminders.Spec(),		r.EmissionsEntries.Spec(),		r.RouteETAs.Spec(),		r.Carriers.Spec(),
 	}
 }
