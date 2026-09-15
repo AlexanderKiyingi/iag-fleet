@@ -64,7 +64,7 @@ var fleetViewPerms = []string{
 	"view_vehicle_category", "view_permit_class", "view_permit_authorisation",
 	"view_weighbridge_ticket", "view_vehicle_diagnostic", "view_driver_hos_log",
 	"view_driver_safety_score", "view_fuel_card_reconciliation", "view_service_reminder",
-	"view_emissions_entry", "view_route_eta", "view_carrier",
+	"view_emissions_entry", "view_route_eta", "view_carrier", "view_trip_pod",
 }
 
 // RequireAnyFleetView gates aggregate/summary endpoints (dashboard, analytics,

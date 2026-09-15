@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -149,10 +150,50 @@ func RegisterOperationsResources(api *gin.RouterGroup, repo *store.Repository) {
 			}
 		}).Register(api, "/route-etas")
 
+	NewTripPODResource(repo).Register(api, "/trip-pods")
+
 	newPlainResource(repo, repo.Carriers, "carrier", "CAR",
 		func(c *models.Carrier) {
 			if c.Status == "" {
 				c.Status = "active"
 			}
 		}).Register(api, "/carriers")
+}
+
+// NewTripPODResource is proof of delivery (0058). A POD needs a trip and a
+// receiver; recording one is what moves the trip to completed, so the
+// transition happens here rather than being a separate PATCH the client
+// might forget.
+func NewTripPODResource(repo *store.Repository) *Resource[models.TripPOD, *models.TripPOD] {
+	r := &Resource[models.TripPOD, *models.TripPOD]{
+		Repo: repo, Collection: repo.TripPODs,
+		Entity: "trip_pod", IDPrefix: "POD",
+	}
+	hook := func(c *gin.Context, p *models.TripPOD) error {
+		if strings.TrimSpace(p.TripID) == "" {
+			return fmt.Errorf("tripId is required — a proof of delivery belongs to a trip")
+		}
+		if strings.TrimSpace(p.ReceivedBy) == "" {
+			return fmt.Errorf("receivedBy is required")
+		}
+		if _, err := repo.Trips.Get(c.Request.Context(), p.TripID); err != nil {
+			return fmt.Errorf("trip %s not found", p.TripID)
+		}
+		if p.Condition == "" {
+			p.Condition = "good"
+		}
+		if p.Status == "" {
+			p.Status = "delivered"
+		}
+		return nil
+	}
+	r.BeforeCreate, r.BeforeUpdate = hook, hook
+	r.AfterCreate = func(ctx context.Context, p models.TripPOD) {
+		_, _ = repo.Trips.Update(ctx, p.TripID, func(t *models.Trip) {
+			if t.Status != "cancelled" {
+				t.Status = "completed"
+			}
+		})
+	}
+	return r
 }

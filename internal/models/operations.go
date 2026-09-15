@@ -209,3 +209,27 @@ type Carrier struct {
 
 func (c Carrier) GetID() string    { return c.ID }
 func (c *Carrier) SetID(id string) { c.ID = id }
+
+// PhotoIDs is a JSONB list of DMS attachment ids.
+type PhotoIDs []string
+
+// TripPOD is proof of delivery for a trip (migration 0058). Recording one
+// completes the trip; see handlers.NewTripPODResource.
+type TripPOD struct {
+	ID            string   `json:"id"                      db:"id" dbcast:"uuid"`
+	TripID        string   `json:"tripId"                  db:"trip_id" dbcast:"uuid"`
+	Reference     string   `json:"reference,omitempty"     db:"reference"`
+	Date          string   `json:"date"                    db:"date" dbcast:"date"`
+	Customer      string   `json:"customer,omitempty"      db:"customer"`
+	ReceivedBy    string   `json:"receivedBy"              db:"received_by"`
+	ReceiverPhone string   `json:"receiverPhone,omitempty" db:"receiver_phone"`
+	Condition     string   `json:"condition"               db:"condition"`
+	PhotoIDs      PhotoIDs `json:"photoIds"                db:"photo_ids"`
+	Status        string   `json:"status"                  db:"status"`
+	Notes         string   `json:"notes,omitempty"         db:"notes"`
+	CreatedAt     string   `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt     string   `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
+}
+
+func (p TripPOD) GetID() string    { return p.ID }
+func (p *TripPOD) SetID(id string) { p.ID = id }

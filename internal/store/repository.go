@@ -72,6 +72,7 @@ type Repository struct {
 	EmissionsEntries        *Collection[models.EmissionsEntry, *models.EmissionsEntry]
 	RouteETAs               *Collection[models.RouteETA, *models.RouteETA]
 	Carriers                *Collection[models.Carrier, *models.Carrier]
+	TripPODs                *Collection[models.TripPOD, *models.TripPOD]
 
 	// Notifications is the per-user signal log surfaced by the bell.
 	// Doesn't follow the generic Collection pattern because every read /
@@ -121,6 +122,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 		EmissionsEntries:        NewCollection[models.EmissionsEntry, *models.EmissionsEntry](pool, "emissions_entries"),
 		RouteETAs:               NewCollection[models.RouteETA, *models.RouteETA](pool, "route_etas"),
 		Carriers:                NewCollection[models.Carrier, *models.Carrier](pool, "carriers"),
+		TripPODs:                NewCollection[models.TripPOD, *models.TripPOD](pool, "trip_pods"),
 
 		Notifications: &NotificationsStore{pool: pool},
 		UserProfiles:  &UserProfilesStore{pool: pool},
@@ -410,6 +412,6 @@ func (r *Repository) SchemaSpecs() []ColumnSpec {
 		r.PermitAuthorisations.Spec(),
 		r.InspectionTemplates.Spec(),
 		r.Inspections.Spec(),
-		r.PMSchedules.Spec(),		r.WeighbridgeTickets.Spec(),		r.VehicleDiagnostics.Spec(),		r.DriverHOSLogs.Spec(),		r.DriverSafetyScores.Spec(),		r.FuelCardReconciliations.Spec(),		r.ServiceReminders.Spec(),		r.EmissionsEntries.Spec(),		r.RouteETAs.Spec(),		r.Carriers.Spec(),
+		r.PMSchedules.Spec(),		r.WeighbridgeTickets.Spec(),		r.VehicleDiagnostics.Spec(),		r.DriverHOSLogs.Spec(),		r.DriverSafetyScores.Spec(),		r.FuelCardReconciliations.Spec(),		r.ServiceReminders.Spec(),		r.EmissionsEntries.Spec(),		r.RouteETAs.Spec(),		r.Carriers.Spec(),		r.TripPODs.Spec(),
 	}
 }

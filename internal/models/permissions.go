@@ -27,7 +27,7 @@ var crudEntities = []string{
 	// Operations records (0057) and the carrier master.
 	"weighbridge_ticket", "vehicle_diagnostic", "driver_hos_log",
 	"driver_safety_score", "fuel_card_reconciliation", "service_reminder",
-	"emissions_entry", "route_eta", "carrier",
+	"emissions_entry", "route_eta", "carrier", "trip_pod",
 }
 
 var workflowPermissions = []PermissionDescriptor{
