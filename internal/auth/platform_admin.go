@@ -19,6 +19,11 @@ var platformAdminViewPermissions = []string{
 	"fleet.view_audit_entry", "fleet.view_operator_ticker",
 	"fleet.view_telemetry", "fleet.view_notification", "fleet.view_pm_schedule",
 	"fleet.view_inspection_template", "fleet.view_vehicle_inspection",
+	"fleet.view_vehicle_category", "fleet.view_permit_class", "fleet.view_permit_authorisation",
+	"fleet.view_weighbridge_ticket", "fleet.view_vehicle_diagnostic", "fleet.view_driver_hos_log",
+	"fleet.view_driver_safety_score", "fleet.view_fuel_card_reconciliation",
+	"fleet.view_service_reminder", "fleet.view_emissions_entry", "fleet.view_route_eta",
+	"fleet.view_carrier", "fleet.view_trip_pod",
 }
 
 func hasPlatformAdminGroup(claims *authclient.Claims) bool {

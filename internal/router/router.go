@@ -217,6 +217,9 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	handlers.NewComplianceResource(repo).Register(api, "/compliance")
 
+	// Operations records and the carrier master (0057).
+	handlers.RegisterOperationsResources(api, repo)
+
 	handlers.NewRequestResource(repo, opts.Events).Register(api, "/requests")
 
 	(&handlers.Resource[models.TaskItem, *models.TaskItem]{

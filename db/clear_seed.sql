@@ -55,6 +55,8 @@ TRUNCATE TABLE
     deployment_days,
     vehicle_inspections,
     pm_schedules,
+    weighbridge_tickets, vehicle_diagnostics, driver_hos_logs, driver_safety_scores,
+    fuel_card_reconciliations, service_reminders, emissions_entries, route_etas, carriers, trip_pods,
     -- Workspace constants (operator/role ticker row)
     operator_ticker,
     -- Activity log (seeded entries only — live entries restart from this point)

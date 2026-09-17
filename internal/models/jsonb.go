@@ -268,3 +268,19 @@ func jsonbBytes(src any) ([]byte, error) {
 		return nil, errors.New("models: cannot scan JSONB from unsupported source type")
 	}
 }
+
+func (p *PhotoIDs) Scan(src any) error {
+	b, err := jsonbBytes(src)
+	if err != nil || b == nil {
+		*p = nil
+		return err
+	}
+	return json.Unmarshal(b, p)
+}
+
+func (p PhotoIDs) Value() (driver.Value, error) {
+	if p == nil {
+		return []byte(`[]`), nil
+	}
+	return json.Marshal(p)
+}
