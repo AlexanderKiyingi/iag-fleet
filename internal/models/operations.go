@@ -216,11 +216,15 @@ type PhotoIDs []string
 // TripPOD is proof of delivery for a trip (migration 0058). Recording one
 // completes the trip; see handlers.NewTripPODResource.
 type TripPOD struct {
-	ID            string   `json:"id"                      db:"id" dbcast:"uuid"`
-	TripID        string   `json:"tripId"                  db:"trip_id" dbcast:"uuid"`
-	Reference     string   `json:"reference,omitempty"     db:"reference"`
-	Date          string   `json:"date"                    db:"date" dbcast:"date"`
-	Customer      string   `json:"customer,omitempty"      db:"customer"`
+	ID        string `json:"id"                      db:"id" dbcast:"uuid"`
+	TripID    string `json:"tripId"                  db:"trip_id" dbcast:"uuid"`
+	Reference string `json:"reference,omitempty"     db:"reference"`
+	Date      string `json:"date"                    db:"date" dbcast:"date"`
+	Customer  string `json:"customer,omitempty"      db:"customer"`
+	// ShipmentRef is the last-mile shipment this POD closes on the Logistics
+	// desk (0059). Free text because that collection lives in another service;
+	// TripID stays the movement, so a POD can carry both links at once.
+	ShipmentRef   string   `json:"shipmentRef,omitempty"   db:"shipment_ref"`
 	ReceivedBy    string   `json:"receivedBy"              db:"received_by"`
 	ReceiverPhone string   `json:"receiverPhone,omitempty" db:"receiver_phone"`
 	Condition     string   `json:"condition"               db:"condition"`
