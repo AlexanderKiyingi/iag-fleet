@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS iag_fleet.schema_migrations (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )`
 
+// migrateLockSQL serialises migration runs across replicas booting together. It
+// is transaction-scoped, so it works through pgbouncer's transaction pooling and
+// releases itself on commit or rollback. The key is unique to this service's
+// ledger, so it never contends with another service on the shared database.
+const migrateLockSQL = `SELECT pg_advisory_xact_lock(hashtext('iag_fleet.schema_migrations'))`
+
 // Migration is one .sql file's contents.
 type Migration struct {
 	Version  string // file name without the .sql suffix, e.g. "0001_initial"
@@ -58,7 +64,7 @@ func Status(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) (applied, pendi
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := pool.Exec(ctx, schemaMigrationsDDL); err != nil {
+	if err := bootstrap(ctx, pool, false); err != nil {
 		return nil, nil, fmt.Errorf("ensure schema_migrations: %w", err)
 	}
 	recorded, err := loadApplied(ctx, pool)
@@ -105,11 +111,8 @@ func Up(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) ([]string, error) {
 		return nil, err
 	}
 
-	if _, err := pool.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS iag_fleet`); err != nil {
-		return nil, fmt.Errorf("create schema iag_fleet: %w", err)
-	}
-	if _, err := pool.Exec(ctx, schemaMigrationsDDL); err != nil {
-		return nil, fmt.Errorf("create schema_migrations: %w", err)
+	if err := bootstrap(ctx, pool, true); err != nil {
+		return nil, err
 	}
 
 	// Safety net for the shared-database cutover: if this service historically
@@ -131,8 +134,12 @@ func Up(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) ([]string, error) {
 		prev, ok := applied[m.Version]
 		switch {
 		case !ok:
-			if err := apply(ctx, pool, m); err != nil {
+			ran, err := apply(ctx, pool, m)
+			if err != nil {
 				return newlyApplied, fmt.Errorf("migration %s: %w", m.Version, err)
+			}
+			if !ran {
+				continue // another replica applied it while we waited
 			}
 			newlyApplied = append(newlyApplied, m.Version)
 			slog.Info("migration applied", "version", m.Version)
@@ -213,6 +220,31 @@ func seedFromLegacyLedger(ctx context.Context, pool *pgxpool.Pool, migs []Migrat
 	return nil
 }
 
+// bootstrap creates the schema (when withSchema) and the ledger table.
+//
+// CREATE … IF NOT EXISTS is not safe against a concurrent CREATE of the same
+// name: both sessions pass the check and one fails on a catalog unique index.
+// So it runs under the same lock as the migrations.
+func bootstrap(ctx context.Context, pool *pgxpool.Pool, withSchema bool) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, migrateLockSQL); err != nil {
+		return fmt.Errorf("migration bootstrap lock: %w", err)
+	}
+	if withSchema {
+		if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS iag_fleet`); err != nil {
+			return fmt.Errorf("create schema iag_fleet: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, schemaMigrationsDDL); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
 func load(fsys fs.FS) ([]Migration, error) {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
@@ -261,26 +293,48 @@ func loadApplied(ctx context.Context, pool *pgxpool.Pool) (map[string]appliedRow
 	return out, rows.Err()
 }
 
-func apply(ctx context.Context, pool *pgxpool.Pool, m Migration) error {
+// apply runs one migration and records it. It reports false, without error,
+// when another replica applied the version while this one waited for the lock.
+func apply(ctx context.Context, pool *pgxpool.Pool, m Migration) (bool, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, m.Body); err != nil {
-		return err
+	// Replicas starting together all see the migration as pending. The lock
+	// serialises them; whoever waited re-checks and skips what the winner
+	// already applied instead of failing on the ledger insert.
+	if _, err := tx.Exec(ctx, migrateLockSQL); err != nil {
+		return false, fmt.Errorf("lock: %w", err)
 	}
+	var exists bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM iag_fleet.schema_migrations WHERE version = $1)`,
+		m.Version).Scan(&exists); err != nil {
+		return false, err
+	}
+	if exists {
+		return false, nil
+	}
+
+	// The ledger row goes in BEFORE the body. A few files (0017, 0024) carry
+	// their own BEGIN/COMMIT, and that COMMIT ends this transaction early —
+	// releasing the lock. Recording first means the row commits with the body,
+	// so a replica that takes the lock next sees the version as applied rather
+	// than running it a second time. Either way a failing body rolls both back.
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO iag_fleet.schema_migrations (version, checksum) VALUES ($1, $2)`,
 		m.Version, m.Checksum); err != nil {
-		// Race with a concurrent migrator? Unique-violation means another
-		// process already recorded this version — bail with a typed error
-		// so the caller can decide.
+		// Unreachable under the lock unless something outside this runner
+		// wrote the ledger; keep the clear error for that case.
 		if strings.Contains(err.Error(), "23505") {
-			return errors.New("concurrent migration: version already applied by another process")
+			return false, errors.New("concurrent migration: version already applied by another process")
 		}
-		return err
+		return false, err
 	}
-	return tx.Commit(ctx)
+	if _, err := tx.Exec(ctx, m.Body); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
