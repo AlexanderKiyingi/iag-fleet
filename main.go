@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/alvor-technologies/iag-platform-go/authclient"
 	platformotel "github.com/alvor-technologies/iag-platform-go/otel"
@@ -136,6 +137,19 @@ func main() {
 	}
 
 	notifBroker := notifications.NewBroker()
+	// Cross-instance bell wake-ups. The producer's wake-up has to reach bell
+	// streams held by every replica; without Redis it reaches only this one,
+	// which is correct for a single replica and quietly incomplete for more.
+	// Its own client (not the cache's) so a Redis that is down at boot is
+	// picked up when it comes back instead of disabling the relay for good.
+	if redisURL := strings.TrimSpace(os.Getenv("REDIS_URL")); redisURL == "" {
+		slog.Info("REDIS_URL unset; bell wake-ups stay per-instance (run a single replica)")
+	} else if opt, err := redis.ParseURL(redisURL); err != nil {
+		slog.Warn("invalid REDIS_URL; bell wake-ups stay per-instance", "err", err)
+	} else {
+		notifBroker.EnableRedis(appCtx, redis.NewClient(opt))
+		slog.Info("cross-instance bell wake-ups enabled (redis)")
+	}
 
 	eventBus := events.New(events.Config{
 		Brokers: cfg.KafkaBrokers,
