@@ -92,9 +92,41 @@ func TestCatalogProtocol_isTheHardwaresProtocolNotTheObservedOne(t *testing.T) {
 	if got := catalogProtocol("Teltonika", "FMB920"); got != "teltonika" {
 		t.Fatalf("protocol %q, want teltonika", got)
 	}
+	if got := catalogProtocol("SeeWorld", "S5L"); got != "gt06" {
+		t.Fatalf("protocol %q, want gt06", got)
+	}
+	if got := catalogProtocol("SeeWorld", "P5"); got != "jt808" {
+		t.Fatalf("protocol %q, want jt808", got)
+	}
 	// Unknown hardware claims nothing rather than guessing.
 	if got := catalogProtocol(BrandOther, "mystery"); got != "" {
 		t.Fatalf("protocol %q, want empty", got)
+	}
+}
+
+func TestValidateDeviceHardware_acceptsAllSeeWorldGPSModels(t *testing.T) {
+	var models []string
+	for _, e := range deviceCatalog {
+		if e.Brand != "SeeWorld" {
+			continue
+		}
+		models = append(models, e.Model)
+		if err := validateDeviceHardware(DeviceTypeTracker, "SeeWorld", e.Model); err != nil {
+			t.Fatalf("SeeWorld %s: %v", e.Model, err)
+		}
+		if e.Protocol != "gt06" && e.Protocol != "jt808" {
+			t.Fatalf("SeeWorld %s protocol %q, want gt06 or jt808", e.Model, e.Protocol)
+		}
+		if e.Listener != e.Protocol {
+			t.Fatalf("SeeWorld %s listener %q != protocol %q", e.Model, e.Listener, e.Protocol)
+		}
+	}
+	if len(models) < 30 {
+		t.Fatalf("expected full SeeWorld GPS catalogue, got %d models: %v", len(models), models)
+	}
+	// Typo under the brand must still fail.
+	if err := validateDeviceHardware(DeviceTypeTracker, "SeeWorld", "NOT-A-MODEL"); err == nil {
+		t.Fatal("unknown SeeWorld model must be rejected")
 	}
 }
 
@@ -151,7 +183,7 @@ func TestDeviceCatalogEndpoint_servesTypesBrandsAndModels(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"SinoTrack", "Teltonika", BrandOther} {
+	for _, want := range []string{"SinoTrack", "Teltonika", "SeeWorld", BrandOther} {
 		if !brands[want] {
 			t.Fatalf("catalogue is missing brand %q", want)
 		}

@@ -134,6 +134,57 @@ func TestIngestionGuide_tcpBlockCarriesTheSMSWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestSeeworldSetServerSMS_ipAndHostname(t *testing.T) {
+	cmd, warning := seeworldSetServerSMS("45.112.204.245", "5023")
+	if cmd != "SERVER,0,45.112.204.245,5023,0#" {
+		t.Fatalf("command %q", cmd)
+	}
+	if warning != "" {
+		t.Fatalf("IP needs no warning, got %q", warning)
+	}
+	cmd, warning = seeworldSetServerSMS("gps.example.com", "5023")
+	if cmd != "SERVER,1,gps.example.com,5023,0#" {
+		t.Fatalf("command %q", cmd)
+	}
+	if warning == "" {
+		t.Fatal("hostname must warn")
+	}
+}
+
+func TestIngestionGuide_tcpBlockCarriesSeeWorldListeners(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("SEEWORLD_GT06_PUBLIC_ADDR", "45.112.204.245:5023")
+	t.Setenv("SEEWORLD_JT808_PUBLIC_ADDR", "45.112.204.245:5015")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/iot/ingestion", nil)
+	(&IoT{}).ingestionGuide(c)
+
+	var body struct {
+		TCP struct {
+			GT06 struct {
+				Configured bool `json:"configured"`
+				SMS        struct {
+					SetServer string `json:"setServer"`
+				} `json:"sms"`
+			} `json:"gt06"`
+			JT808 struct {
+				Configured bool `json:"configured"`
+			} `json:"jt808"`
+		} `json:"tcp"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v — %s", err, w.Body.String())
+	}
+	if !body.TCP.GT06.Configured || body.TCP.GT06.SMS.SetServer != "SERVER,0,45.112.204.245,5023,0#" {
+		t.Fatalf("gt06 block %+v", body.TCP.GT06)
+	}
+	if !body.TCP.JT808.Configured {
+		t.Fatal("jt808 should be configured")
+	}
+}
+
 func TestIngestionGuide_tcpBlockOffersNoSMSWithoutAnAddress(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Setenv("SINOTRACK_PUBLIC_ADDR", "")

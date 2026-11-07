@@ -20,6 +20,8 @@ package handlers
 //
 //	SINOTRACK_PUBLIC_ADDR=45.112.204.245:5013
 //	TELTONIKA_PUBLIC_ADDR=45.112.204.245:5027
+//	SEEWORLD_GT06_PUBLIC_ADDR=45.112.204.245:5023
+//	SEEWORLD_JT808_PUBLIC_ADDR=45.112.204.245:5015
 
 import (
 	"fmt"
@@ -33,6 +35,8 @@ import (
 const (
 	defaultSinotrackPort = "5013"
 	defaultTeltonikaPort = "5027"
+	defaultGT06Port      = "5023"
+	defaultJT808Port     = "5015"
 
 	// The factory password on every ST-90x. Operators who changed it know they
 	// did; operators who did not would otherwise have to look it up.
@@ -135,6 +139,47 @@ func tcpIngestionBlock() gin.H {
 		sinotrack["sms"] = sms
 	}
 
+	gt06 := describeTCPListener(
+		"SEEWORLD_GT06_PUBLIC_ADDR",
+		os.Getenv("SEEWORLD_GT06_PUBLIC_ADDR"),
+		"SeeWorld / Concox GT06 (S06A, S5L, R-series, OBD, magnetic, …)",
+		defaultGT06Port,
+	)
+	if host, _ := gt06["host"].(string); host != "" {
+		port, _ := gt06["port"].(string)
+		command, warning := seeworldSetServerSMS(host, port)
+		sms := gin.H{
+			"setServer": command,
+			"note": "Text this to the device SIM (SeeWorld / GT06 SERVER command). " +
+				"Prefer a literal IP — many firmwares ignore hostnames. " +
+				"Serial on the device row must equal the unit IMEI.",
+		}
+		if warning != "" {
+			sms["warning"] = warning
+		}
+		gt06["sms"] = sms
+	}
+
+	jt808 := describeTCPListener(
+		"SEEWORLD_JT808_PUBLIC_ADDR",
+		os.Getenv("SEEWORLD_JT808_PUBLIC_ADDR"),
+		"SeeWorld JT808 (P5, W20L)",
+		defaultJT808Port,
+	)
+	if host, _ := jt808["host"].(string); host != "" {
+		port, _ := jt808["port"].(string)
+		command, warning := seeworldSetServerSMS(host, port)
+		sms := gin.H{
+			"setServer": command,
+			"note": "SERVER SMS for JT808 SeeWorld units. Serial must match the " +
+				"JT808 terminal phone / IMEI digits the unit puts in the header.",
+		}
+		if warning != "" {
+			sms["warning"] = warning
+		}
+		jt808["sms"] = sms
+	}
+
 	return gin.H{
 		"sinotrack": sinotrack,
 		"teltonika": describeTCPListener(
@@ -143,7 +188,27 @@ func tcpIngestionBlock() gin.H {
 			"Teltonika Codec 8 / 8E",
 			defaultTeltonikaPort,
 		),
-		"note": "Both listeners speak raw TCP and cannot be reached through the API " +
+		"gt06":  gt06,
+		"jt808": jt808,
+		"note": "These listeners speak raw TCP and cannot be reached through the API " +
 			"gateway or the web app. Each needs a publicly reachable host:port of its own.",
 	}
+}
+
+// seeworldSetServerSMS builds the SeeWorld / Concox SERVER command.
+//
+//	SERVER,0,<ip>,<port>,0#     — IP form (preferred)
+//	SERVER,1,<hostname>,<port>,0# — domain form
+func seeworldSetServerSMS(host, port string) (command, warning string) {
+	if host == "" {
+		return "", ""
+	}
+	if net.ParseIP(host) != nil {
+		return fmt.Sprintf("SERVER,0,%s,%s,0#", host, port), ""
+	}
+	return fmt.Sprintf("SERVER,1,%s,%s,0#", host, port),
+		"This address is a hostname. Many SeeWorld / GT06 firmwares accept only a " +
+			"literal IP in the SERVER command and will ignore a hostname without " +
+			"reporting an error — confirm with one unit before programming a fleet, " +
+			"or terminate the gateway on a static IP."
 }

@@ -16,14 +16,16 @@ their own — see below.
 
 ## What exists
 
-`Fleet_IoT` (`edge/Fleet_IoT`, repo `iag-telemetry-gateway`) ships three
+`Fleet_IoT` (`edge/Fleet_IoT`, repo `iag-telemetry-gateway`) ships five
 listeners, each its own binary:
 
 | Binary | Default port | Protocol |
 |--------|--------------|----------|
 | `/app/ingest` | `:4080` | HTTP JSON — `POST /api/iot/pings` (and `/v1/pings`), Bearer = the device's plaintext API key |
 | `/app/gateway` | `:5027` | Teltonika Codec 8 / 8E, TCP |
-| `/app/sinotrack` | `:5013` | SinoTrack / HQ protocol, TCP (ST-901/906/915 and GT06-era clones) |
+| `/app/sinotrack` | `:5013` | SinoTrack / HQ protocol, TCP (ST-901/906/915 and HQ ASCII clones) |
+| `/app/gt06` | `:5023` | SeeWorld / Concox GT06, TCP (most SeeWorld GPS SKUs) |
+| `/app/jt808` | `:5015` | SeeWorld JT808, TCP (P5, W20L) |
 
 Pings land in `telemetry_timeseries` (TimescaleDB hypertable). `iag-fleet` reads
 them back — `/api/vehicles/:id/track`, `/track/latest`, `/track/stream` and the
@@ -91,9 +93,10 @@ serves both, but only the former exists on the gateway, so it is the one that is
 correct in either topology.
 
 **What still genuinely needs public ingress: the TCP listeners.** `/app/gateway`
-(Teltonika, :5027) and `/app/sinotrack` (SinoTrack/HQ, :5013) speak raw TCP.
-An HTTP gateway cannot carry that, so those need a Railway TCP Proxy of their
-own. Trackers that can post JSON over HTTP do not.
+(Teltonika, :5027), `/app/sinotrack` (HQ, :5013), `/app/gt06` (SeeWorld GT06,
+:5023) and `/app/jt808` (SeeWorld JT808, :5015) speak raw TCP. An HTTP gateway
+cannot carry that, so those need a Railway TCP Proxy of their own. Trackers that
+can post JSON over HTTP do not.
 
 ## Steps
 
@@ -151,12 +154,13 @@ own. Trackers that can post JSON over HTTP do not.
    curl -X POST      https://iag-api-gateway-production.up.railway.app/api/v1/fleet/api/iot/pings      -H "Authorization: Bearer <plaintext-api-key>"      -H "Content-Type: application/json"      -d '{"lat":0.3476,"lng":32.5825,"speedKmh":0}'
    ```
 
-6. **Only then, the TCP listeners.** Two more services from the same image with
-   `startCommand` set to `/app/gateway` and `/app/sinotrack`, each behind a
-   Railway TCP Proxy. See `edge/Fleet_IoT/docs/ST-901-onboarding.md` — most
-   ST-901 firmwares want a literal IP and a TCP Proxy gives a domain:port, so if
-   the firmware will not take a hostname these have to terminate somewhere with
-   a stable public IP.
+6. **Only then, the TCP listeners.** More services from the same image with
+   `startCommand` set to `/app/gateway`, `/app/sinotrack`, `/app/gt06`, and/or
+   `/app/jt808` as needed, each behind a Railway TCP Proxy. See
+   `edge/Fleet_IoT/docs/ST-901-onboarding.md` and
+   `edge/Fleet_IoT/docs/SEEWORLD-onboarding.md`. Most tracker firmwares want a
+   literal IP and a TCP Proxy gives a domain:port, so if the firmware will not
+   take a hostname these have to terminate somewhere with a stable public IP.
 
 ## Checking it worked
 
