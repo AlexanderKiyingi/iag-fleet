@@ -29,6 +29,9 @@ import (
 //	  PATCH  /api/iot/devices/:id           { label?, vehicleId?, isActive? }
 //	  DELETE /api/iot/devices/:id
 //	  POST   /api/iot/devices/:id/rotate-key
+//	  GET/POST /api/iot/devices/:id/commands  immobilize|mobilize queue + history
+//	  GET    /api/iot/command-models
+//	  GET/POST /api/vehicles/:id/commands     same via the vehicle's active device
 //
 //	HTTP ingestion runs on Fleet_IoT (see GET /api/iot/ingestion).
 //
@@ -108,6 +111,8 @@ func (h *IoT) Register(rg *gin.RouterGroup) {
 	rg.GET("/vehicles/:id/fuel/events", fuelRead, h.requireStore, h.fuelEvents)
 	rg.GET("/vehicles/:id/fuel/summary", fuelRead, h.requireStore, h.fuelSummary)
 	rg.GET("/fuel/anomalies", fuelRead, h.requireStore, h.fleetFuelAnomalies)
+
+	h.registerCommands(rg)
 }
 
 // ─────────────────────────── Device admin ──────────────────────────
@@ -891,6 +896,9 @@ type geofencePOIBody struct {
 	RadiusKm *float64 `json:"radiusKm"`
 	IsActive *bool    `json:"isActive"`
 	Rule     *string  `json:"rule"`
+	Shape    *string  `json:"shape"`
+	// Vertices for polygon fences. Omitted leaves the stored ring alone on PATCH.
+	Vertices *[]iot.LatLng `json:"vertices"`
 	// Pointer to a slice so "not mentioned" stays distinct from "cleared".
 	// Sending [] returns the fence to every vehicle; omitting the field leaves
 	// the assignments alone. Collapsing those two would silently un-scope a
@@ -958,6 +966,21 @@ func (h *IoT) upsertGeofencePOI(c *gin.Context) {
 	if body.Rule != nil {
 		current.Rule = iot.ParseGeofenceRule(*body.Rule)
 	}
+	if body.Shape != nil {
+		current.Shape = strings.TrimSpace(*body.Shape)
+	}
+	if body.Vertices != nil {
+		current.Vertices = append([]iot.LatLng{}, (*body.Vertices)...)
+	}
+	if strings.EqualFold(current.Shape, iot.ShapePolygon) {
+		current.Shape = iot.ShapePolygon
+		if lat, lng, r, ok := iot.CentroidAndRadiusKm(current.Vertices); ok {
+			current.Lat, current.Lng, current.RadiusKm = lat, lng, r
+		}
+	} else {
+		current.Shape = iot.ShapeCircle
+		current.Vertices = nil
+	}
 
 	if msg := validateGeofencePOI(current); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
@@ -1015,16 +1038,28 @@ func (h *IoT) upsertGeofencePOI(c *gin.Context) {
 	if priorName == "" {
 		status = http.StatusCreated
 	}
-	c.JSON(status, geofencePOIRecord{
+	c.JSON(status, toGeofencePOIRecord(current))
+}
+
+func toGeofencePOIRecord(p iot.GeofencePOIRecord) geofencePOIRecord {
+	updated := p.UpdatedAt
+	if updated.IsZero() {
+		updated = time.Now().UTC()
+	}
+	shape := p.Shape
+	if shape == "" {
+		shape = iot.ShapeCircle
+	}
+	return geofencePOIRecord{
 		geofencePOI: geofencePOI{
-			Name: current.Name, Lat: current.Lat, Lng: current.Lng,
-			Type: current.Type, RadiusKm: current.RadiusKm,
+			Name: p.Name, Lat: p.Lat, Lng: p.Lng, Type: p.Type, RadiusKm: p.RadiusKm,
+			Shape: shape, Vertices: append([]iot.LatLng{}, p.Vertices...),
 		},
-		IsActive:   current.IsActive,
-		Rule:       string(iot.ParseGeofenceRule(string(current.Rule))),
-		VehicleIDs: append([]string{}, current.VehicleIDs...),
-		UpdatedAt:  time.Now().UTC(),
-	})
+		IsActive:   p.IsActive,
+		Rule:       string(iot.ParseGeofenceRule(string(p.Rule))),
+		VehicleIDs: append([]string{}, p.VehicleIDs...),
+		UpdatedAt:  updated,
+	}
 }
 
 // validateGeofencePOI reports why a fence is unusable, in words.
@@ -1033,9 +1068,17 @@ func (h *IoT) upsertGeofencePOI(c *gin.Context) {
 // violation surfaces as a 500 naming geofence_pois_radius_positive, which tells
 // an operator nothing about what to type instead.
 func validateGeofencePOI(p iot.GeofencePOIRecord) string {
+	shape := strings.ToLower(strings.TrimSpace(p.Shape))
+	if shape == "" {
+		shape = iot.ShapeCircle
+	}
 	switch {
 	case p.Name == "":
 		return "name is required"
+	case shape != iot.ShapeCircle && shape != iot.ShapePolygon:
+		return "shape must be circle or polygon"
+	case shape == iot.ShapePolygon && len(p.Vertices) < 3:
+		return "polygon fences need at least 3 vertices"
 	case p.Lat < -90 || p.Lat > 90:
 		return "lat must be between -90 and 90"
 	case p.Lng < -180 || p.Lng > 180:
@@ -1076,11 +1119,13 @@ func (h *IoT) deleteGeofencePOI(c *gin.Context) {
 // carries no JSON tags — it is an internal evaluation type — so the API shape
 // is declared here rather than leaking Go field names to the client.
 type geofencePOI struct {
-	Name     string  `json:"name"`
-	Lat      float64 `json:"lat"`
-	Lng      float64 `json:"lng"`
-	Type     string  `json:"type"`
-	RadiusKm float64 `json:"radiusKm"`
+	Name     string       `json:"name"`
+	Lat      float64      `json:"lat"`
+	Lng      float64      `json:"lng"`
+	Type     string       `json:"type"`
+	RadiusKm float64      `json:"radiusKm"`
+	Shape    string       `json:"shape,omitempty"`
+	Vertices []iot.LatLng `json:"vertices,omitempty"`
 }
 
 // geofencePOIs lists the active geofences.
@@ -1103,16 +1148,8 @@ func (h *IoT) geofencePOIs(c *gin.Context) {
 		}
 		out := make([]geofencePOIRecord, 0, len(records))
 		for _, p := range records {
-			out = append(out, geofencePOIRecord{
-				geofencePOI: geofencePOI{Name: p.Name, Lat: p.Lat, Lng: p.Lng, Type: p.Type, RadiusKm: p.RadiusKm},
-				IsActive:    p.IsActive,
-				Rule:        string(p.Rule),
-				// Never nil: an omitted JSON array and an empty one read
-				// differently to a client, and empty is the meaningful state
-				// here — it says the fence watches every vehicle.
-				VehicleIDs: append([]string{}, p.VehicleIDs...),
-				UpdatedAt:  p.UpdatedAt,
-			})
+			rec := toGeofencePOIRecord(p)
+			out = append(out, rec)
 		}
 		c.JSON(http.StatusOK, gin.H{"pois": out, "count": len(out)})
 		return
@@ -1133,6 +1170,7 @@ func (h *IoT) geofencePOIs(c *gin.Context) {
 	for _, p := range pois {
 		out = append(out, geofencePOI{
 			Name: p.Name, Lat: p.Lat, Lng: p.Lng, Type: p.Type, RadiusKm: p.RadiusKm,
+			Shape: p.Shape, Vertices: append([]iot.LatLng{}, p.Vertices...),
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{

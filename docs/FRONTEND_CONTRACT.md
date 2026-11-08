@@ -59,6 +59,18 @@ Endpoints:
 - `GET /api/v1/fleet/api/vehicles/:id/track/stream` — GPS SSE (`event: ping`)
 - `GET /api/v1/fleet/api/vehicles/live/stream` — fleet map SSE (`event: fleet`)
 
+## Device commands (immobilise / mobilise)
+
+Queue only — delivery is on the device’s next TCP session (Fleet_IoT gateway), subject to speed/fix interlocks.
+
+- `GET /api/v1/fleet/api/iot/command-models` — models with a verified encoder (`enabled` is false until one is registered)
+- `POST /api/v1/fleet/api/iot/devices/:id/commands` — `{ "kind": "immobilize" | "mobilize" }`
+- `GET /api/v1/fleet/api/iot/devices/:id/commands` — recent history
+- `POST /api/v1/fleet/api/vehicles/:id/commands` — same, via the vehicle’s active tracker
+- `GET /api/v1/fleet/api/vehicles/:id/commands`
+
+Permission: `manage_iot_device` (queue/list); `view_telemetry` may read `command-models`.
+
 ## JSON shapes
 
 Unchanged from the HAULA Fleet API — field names remain camelCase (`vehicleId`, `jmpId`, etc.). Only the base URL and auth mechanism change.

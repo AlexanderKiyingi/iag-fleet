@@ -46,6 +46,15 @@ func TestValidateGeofencePOI(t *testing.T) {
 			func(p *iot.GeofencePOIRecord) { p.Lat, p.Lng = 0, 0 },
 			"lat/lng 0,0 is the no-fix sentinel, not a location",
 		},
+		{
+			"polygon too few vertices",
+			func(p *iot.GeofencePOIRecord) {
+				p.Shape = iot.ShapePolygon
+				p.Vertices = []iot.LatLng{{Lat: 1, Lng: 1}, {Lat: 2, Lng: 2}}
+				p.RadiusKm = 1
+			},
+			"polygon fences need at least 3 vertices",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
