@@ -102,6 +102,16 @@ func main() {
 	reportSchemaDrift(context.Background(), operationalPool, repo)
 	reportTelemetryLocation(context.Background(), operationalPool, telemetryPool)
 	iotStore := iot.NewSplitStore(operationalPool, telemetryPool)
+	// Keep the in-process geofence set current for ping evaluation on this
+	// service. Gateways run the same loop; CRUD also refreshes immediately.
+	{
+		geoCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := iotStore.RefreshGeofencePOIs(geoCtx); err != nil {
+			slog.Warn("initial geofence POI load failed; using built-in until refresh succeeds", "err", err)
+		}
+		cancel()
+		go iotStore.StartGeofenceRefresh(appCtx)
+	}
 	verifier := authclient.NewVerifier(authclient.Options{
 		JWKSURL:  cfg.JWKSURL,
 		Issuer:   cfg.JWTIssuer,
