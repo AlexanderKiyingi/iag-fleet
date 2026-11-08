@@ -225,10 +225,35 @@ var deviceCatalog = []CatalogEntry{
 		Note:         "Resistive/voltage sender. Reports millivolts; calibrate scale and offset in the vehicle."},
 }
 
+// normalizeCatalogModel strips a redundant brand prefix from a model string.
+//
+// Operators (and some UIs) paste "SeeWorld D11" or "SeeWorld-D11" into the
+// model field after already selecting brand SeeWorld. The catalogue key is
+// just "D11", so without this the create fails even though the hardware is
+// supported. Returns the trimmed model when there is no prefix to strip.
+func normalizeCatalogModel(brand, model string) string {
+	brand, model = strings.TrimSpace(brand), strings.TrimSpace(model)
+	if brand == "" || model == "" || strings.EqualFold(brand, BrandOther) {
+		return model
+	}
+	lowerModel, lowerBrand := strings.ToLower(model), strings.ToLower(brand)
+	if !strings.HasPrefix(lowerModel, lowerBrand) {
+		return model
+	}
+	rest := strings.TrimSpace(model[len(brand):])
+	rest = strings.TrimLeft(rest, " \t-_/")
+	if rest == "" {
+		return model
+	}
+	return rest
+}
+
 // catalogEntry finds hardware by brand and model, case-insensitively so an
-// operator's capitalisation is not a validation failure.
+// operator's capitalisation is not a validation failure. Model may include a
+// redundant brand prefix ("SeeWorld D11") — that is normalised before lookup.
 func catalogEntry(brand, model string) (CatalogEntry, bool) {
-	b, m := strings.TrimSpace(brand), strings.TrimSpace(model)
+	b := strings.TrimSpace(brand)
+	m := normalizeCatalogModel(b, model)
 	for _, e := range deviceCatalog {
 		if strings.EqualFold(e.Brand, b) && strings.EqualFold(e.Model, m) {
 			return e, true
@@ -260,7 +285,8 @@ func validateDeviceHardware(deviceType, brand, model string) error {
 		return fmt.Errorf("unknown device type %q — expected %s or %s",
 			deviceType, DeviceTypeTracker, DeviceTypeFuelSensor)
 	}
-	brand, model = strings.TrimSpace(brand), strings.TrimSpace(model)
+	brand = strings.TrimSpace(brand)
+	model = normalizeCatalogModel(brand, model)
 	if brand == "" || strings.EqualFold(brand, BrandOther) {
 		return nil
 	}

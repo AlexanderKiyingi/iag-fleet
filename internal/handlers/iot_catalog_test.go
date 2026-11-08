@@ -15,10 +15,22 @@ func TestValidateDeviceHardware_acceptsCatalogueHardware(t *testing.T) {
 		{DeviceTypeTracker, "SinoTrack", "ST-901"},
 		{DeviceTypeTracker, "Teltonika", "FMB920"},
 		{DeviceTypeFuelSensor, "Technoton", "DUT-E"},
+		{DeviceTypeTracker, "SeeWorld", "D11"},
+		{DeviceTypeTracker, "SeeWorld", "SeeWorld D11"}, // brand repeated in model
+		{DeviceTypeTracker, "SeeWorld", "SeeWorld-D11"},
 	} {
 		if err := validateDeviceHardware(tc.dtype, tc.brand, tc.model); err != nil {
 			t.Fatalf("%s %s %s: %v", tc.dtype, tc.brand, tc.model, err)
 		}
+	}
+}
+
+func TestNormalizeCatalogModel_stripsBrandPrefix(t *testing.T) {
+	if got := normalizeCatalogModel("SeeWorld", "SeeWorld D11"); got != "D11" {
+		t.Fatalf("got %q, want D11", got)
+	}
+	if got := normalizeCatalogModel("SeeWorld", "D11"); got != "D11" {
+		t.Fatalf("bare model changed: %q", got)
 	}
 }
 

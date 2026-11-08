@@ -165,6 +165,9 @@ func (h *IoT) createDevice(c *gin.Context) {
 	}
 	// Reject hardware the catalogue does not know HERE, not when a frame
 	// arrives at 3am and no decoder matches. The error names the alternatives.
+	// Normalise "SeeWorld D11" → "D11" so a redundant brand in the model field
+	// is stored as the catalogue key rather than rejected or duplicated.
+	body.Model = normalizeCatalogModel(body.Brand, body.Model)
 	if err := validateDeviceHardware(body.DeviceType, body.Brand, body.Model); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -296,6 +299,20 @@ func (h *IoT) updateDevice(c *gin.Context) {
 
 	// A PATCH may send only one of the three, so the catalogue is checked
 	// against what the row will BE once merged, not against what was sent.
+	if body.Model != nil {
+		brandForNorm := ""
+		if body.Brand != nil {
+			brandForNorm = *body.Brand
+		}
+		normalized := normalizeCatalogModel(brandForNorm, *body.Model)
+		// When only model is patched, strip using the brand already on the row.
+		if brandForNorm == "" {
+			if current, err := h.Store.GetDevice(c.Request.Context(), id); err == nil {
+				normalized = normalizeCatalogModel(current.Brand, *body.Model)
+			}
+		}
+		body.Model = &normalized
+	}
 	if !h.hardwarePatchIsValid(c, id, body.DeviceType, body.Brand, body.Model) {
 		return
 	}
