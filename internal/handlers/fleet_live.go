@@ -46,6 +46,11 @@ type fleetVehicleSnap struct {
 	Speed         float64 `json:"speed"`
 	LastSeen      string  `json:"lastSeen,omitempty"`
 	LastFixSource string  `json:"lastFixSource,omitempty"`
+	// Fuel is the vehicles.fuel hot-state column (%). Without it the live desk
+	// could only show tank level after a full records hydrate, so gauges sat
+	// empty while the map markers moved.
+	Fuel        float64 `json:"fuel"`
+	FuelTracker bool    `json:"fuelTracker"`
 }
 
 type fleetPayload struct {
@@ -131,5 +136,6 @@ func vehicleSnap(v models.Vehicle) fleetVehicleSnap {
 		ID: v.ID, Plate: v.Plate, Lat: v.Lat, Lng: v.Lng,
 		Status: v.Status, Heading: v.Heading, Location: v.Location,
 		Speed: v.Speed, LastSeen: v.LastSeen, LastFixSource: v.LastFixSource,
+		Fuel: v.Fuel, FuelTracker: v.FuelTracker,
 	}
 }
