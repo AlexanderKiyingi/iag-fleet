@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -1034,6 +1035,13 @@ func (h *IoT) upsertGeofencePOI(c *gin.Context) {
 		current.VehicleIDs = *body.VehicleIDs
 	}
 
+	// Push the new row into the in-process evaluator now. Gateways still poll
+	// on GeofenceRefreshInterval; without this, fleet's own ping path would
+	// keep judging against the previous set until that tick.
+	if err := h.Store.RefreshGeofencePOIs(ctx); err != nil {
+		slog.Warn("geofence POI refresh after upsert failed", "err", err, "name", current.Name)
+	}
+
 	status := http.StatusOK
 	if priorName == "" {
 		status = http.StatusCreated
@@ -1099,7 +1107,8 @@ func (h *IoT) deleteGeofencePOI(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
-	removed, err := h.Store.DeleteGeofencePOI(c.Request.Context(), name)
+	ctx := c.Request.Context()
+	removed, err := h.Store.DeleteGeofencePOI(ctx, name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -1107,6 +1116,11 @@ func (h *IoT) deleteGeofencePOI(c *gin.Context) {
 	if !removed {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no geofence named " + name})
 		return
+	}
+	// Drop the fence from the in-process set immediately so the next ping
+	// does not still treat a deleted site as monitored.
+	if err := h.Store.RefreshGeofencePOIs(ctx); err != nil {
+		slog.Warn("geofence POI refresh after delete failed", "err", err, "name", name)
 	}
 	// The row is gone; vehicle_geofence_state rows for it are left alone. They
 	// are keyed by name, so they are inert until a fence of that name exists
