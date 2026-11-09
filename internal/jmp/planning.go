@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,9 +17,19 @@ import (
 const acpLat = -0.880
 const acpLng = 30.265
 
+var (
+	engineLitresRe = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*l(?:itres?|iters?)?\b`)
+	engineCcRe     = regexp.MustCompile(`(?i)(\d{3,5})\s*cc\b`)
+	engineBareRe   = regexp.MustCompile(`^(\d+(?:\.\d+)?)$`)
+	engineHpRe     = regexp.MustCompile(`(?i)\b(?:hp|ps|bhp|kw)\b`)
+)
+
 // Enrich fills distance, fuel estimate, and budget when missing — mirrors HAULA v7:
 // totalBudgetUgx = fuelEstimateL × dieselPrice + mileageRequest.
-func Enrich(ctx context.Context, j *models.JMP, osrmBaseURL string) {
+//
+// Fuel litres prefer the assigned vehicle's engine capacity / type (same bands as
+// the iag-fleet form). Flat FLEET_JMP_L_PER_100KM remains the last-resort default.
+func Enrich(ctx context.Context, j *models.JMP, osrmBaseURL string, vehicle *models.Vehicle) {
 	if j == nil {
 		return
 	}
@@ -34,7 +45,7 @@ func Enrich(ctx context.Context, j *models.JMP, osrmBaseURL string) {
 		}
 	}
 	if j.FuelEstimateL <= 0 && j.DistanceKm > 0 {
-		j.FuelEstimateL = math.Round(estimateFuelLitres(j.DistanceKm)*10) / 10
+		j.FuelEstimateL = math.Round(estimateFuelLitres(j.DistanceKm, vehicle)*10) / 10
 	}
 	RecalculateBudget(j)
 }
@@ -50,20 +61,126 @@ func RecalculateBudget(j *models.JMP) {
 	}
 }
 
-func estimateFuelLitres(distanceKm float64) float64 {
+func estimateFuelLitres(distanceKm float64, vehicle *models.Vehicle) float64 {
 	if distanceKm <= 0 {
 		return 0
 	}
-	return distanceKm * lPer100Km() / 100.0
+	rate := lPer100KmDefault()
+	if vehicle != nil {
+		rate = resolveConsumptionRate(vehicle.EngineCapacity, vehicle.Type)
+	}
+	return distanceKm * rate / 100.0
 }
 
-func lPer100Km() float64 {
+// resolveConsumptionRate mirrors iag-fleet/src/lib/fleet/fuel-estimate.ts.
+func resolveConsumptionRate(engineCapacity, vehicleType string) float64 {
+	if litres := parseEngineLitres(engineCapacity); litres != nil {
+		return litresPer100KmFromEngine(*litres, vehicleType)
+	}
+	if strings.TrimSpace(vehicleType) != "" {
+		return litresPer100KmForType(vehicleType)
+	}
+	return lPer100KmDefault()
+}
+
+func parseEngineLitres(raw string) *float64 {
+	text := strings.TrimSpace(strings.ToLower(raw))
+	if text == "" {
+		return nil
+	}
+	if m := engineLitresRe.FindStringSubmatch(text); len(m) == 2 {
+		n, err := strconv.ParseFloat(m[1], 64)
+		if err == nil && n > 0 && n <= 30 {
+			v := round1(n)
+			return &v
+		}
+	}
+	if m := engineCcRe.FindStringSubmatch(text); len(m) == 2 {
+		cc, err := strconv.ParseFloat(m[1], 64)
+		if err == nil && cc >= 50 {
+			v := round1(cc / 1000)
+			return &v
+		}
+	}
+	if engineHpRe.MatchString(text) {
+		return nil
+	}
+	if m := engineBareRe.FindStringSubmatch(text); len(m) == 2 {
+		n, err := strconv.ParseFloat(m[1], 64)
+		if err != nil || n <= 0 {
+			return nil
+		}
+		if n <= 20 {
+			v := round1(n)
+			return &v
+		}
+		if n >= 500 && n <= 20000 {
+			v := round1(n / 1000)
+			return &v
+		}
+	}
+	return nil
+}
+
+func litresPer100KmFromEngine(engineLitres float64, vehicleType string) float64 {
+	t := strings.ToLower(strings.TrimSpace(vehicleType))
+	base, perLitre := 10.0, 2.8
+	switch {
+	case strings.Contains(t, "motor") || t == "motorcycle":
+		base, perLitre = 2, 2.5
+	case t == "car" || strings.Contains(t, "sedan") || strings.Contains(t, "saloon"):
+		base, perLitre = 5, 2.2
+	case t == "van" || strings.Contains(t, "pickup") || strings.Contains(t, "pick-up"):
+		base, perLitre = 7, 2.4
+	case strings.Contains(t, "trailer") || strings.Contains(t, "prime") || strings.Contains(t, "artic"):
+		base, perLitre = 14, 2.6
+	}
+	return round1(clamp(base+engineLitres*perLitre, 3, 55))
+}
+
+func litresPer100KmForType(vehicleType string) float64 {
+	t := strings.ToLower(strings.TrimSpace(vehicleType))
+	switch {
+	case t == "":
+		return lPer100KmDefault()
+	case strings.Contains(t, "motor") || strings.Contains(t, "bike") || t == "motorcycle":
+		return 3.5
+	case t == "car" || strings.Contains(t, "sedan") || strings.Contains(t, "saloon"):
+		return 9
+	case t == "van" || strings.Contains(t, "minibus"):
+		return 12
+	case strings.Contains(t, "pickup") || strings.Contains(t, "pick-up") || t == "pick up":
+		return 13
+	case strings.Contains(t, "trailer") || strings.Contains(t, "prime") || strings.Contains(t, "artic"):
+		return 36
+	case strings.Contains(t, "truck") || strings.Contains(t, "lorry") || strings.Contains(t, "tipper") || strings.Contains(t, "haul"):
+		return 30
+	default:
+		return 28
+	}
+}
+
+func lPer100KmDefault() float64 {
 	if v := os.Getenv("FLEET_JMP_L_PER_100KM"); v != "" {
 		if n, err := strconv.ParseFloat(v, 64); err == nil && n > 0 {
 			return n
 		}
 	}
 	return 32.0
+}
+
+func round1(n float64) float64 {
+	return math.Round(n*10) / 10
+}
+
+func clamp(n, min, max float64) float64 {
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
 }
 
 func baseDieselPriceUGX() float64 {

@@ -57,7 +57,13 @@ func (j *JMPs) Register(rg *gin.RouterGroup, base string) {
 }
 
 func (j *JMPs) normalize(c *gin.Context, jmp *models.JMP) {
-	jmpplan.Enrich(c.Request.Context(), jmp, j.RoutingOSRMURL)
+	var vehicle *models.Vehicle
+	if jmp.VehicleID != "" {
+		if v, err := j.inner.Repo.Vehicles.Get(c.Request.Context(), jmp.VehicleID); err == nil {
+			vehicle = &v
+		}
+	}
+	jmpplan.Enrich(c.Request.Context(), jmp, j.RoutingOSRMURL, vehicle)
 }
 
 func (j *JMPs) create(c *gin.Context) {

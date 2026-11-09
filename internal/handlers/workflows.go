@@ -649,7 +649,13 @@ func (w *Workflows) requestCreateJMP(c *gin.Context) {
 		SourceRequestID:   req.ID,
 	}
 
-	jmpplan.Enrich(ctx, &jmp, w.RoutingOSRMURL)
+	var vehicle *models.Vehicle
+	if jmp.VehicleID != "" {
+		if v, err := w.Repo.Vehicles.Get(ctx, jmp.VehicleID); err == nil {
+			vehicle = &v
+		}
+	}
+	jmpplan.Enrich(ctx, &jmp, w.RoutingOSRMURL, vehicle)
 
 	created, err := w.Repo.JMPs.Add(ctx, jmp)
 	if err != nil {
