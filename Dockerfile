@@ -98,7 +98,12 @@ FROM base AS fleet-iot-clone
 # Still fatal: a table unreachable on this connection while existing in another
 # schema. That is the original bug and it is distinguishable, because the name
 # does not resolve at all.
-ARG FLEET_IOT_REF=a967f20
+# Bumped to adc5ed6: polygon geofences (LatLng, Shape, Vertices,
+# ShapePolygon, CentroidAndRadiusKm) plus the 30s active-geofence reload.
+# Fleet handlers already write shape/vertices on upsert; a967f20 had no
+# those symbols, so standalone builds failed at compile time while the
+# monorepo target stayed green against edge/Fleet_IoT.
+ARG FLEET_IOT_REF=adc5ed6
 ARG FLEET_IOT_REPO=https://github.com/AlexanderKiyingi/iag-telemetry-gateway.git
 RUN git clone --filter=blob:none --no-checkout "${FLEET_IOT_REPO}" "${FLEET_IOT_DEP}" \
     && cd "${FLEET_IOT_DEP}" \
