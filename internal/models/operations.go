@@ -210,6 +210,29 @@ type Carrier struct {
 func (c Carrier) GetID() string    { return c.ID }
 func (c *Carrier) SetID(id string) { c.ID = id }
 
+// RoutePlace is a reusable JMP waypoint (migration 0060). Coordinates are
+// researched online or picked on the map and stored so the next plan can
+// reuse Malaba / ACP / a port without depending on geofence_pois.
+type RoutePlace struct {
+	ID            string  `json:"id"                        db:"id" dbcast:"uuid"`
+	Name          string  `json:"name"                      db:"name"`
+	Lat           float64 `json:"lat"                       db:"lat"`
+	Lng           float64 `json:"lng"                       db:"lng"`
+	Source        string  `json:"source"                    db:"source"`
+	OsmID         string  `json:"osmId,omitempty"           db:"osm_id"`
+	GooglePlaceID string  `json:"googlePlaceId,omitempty"   db:"google_place_id"`
+	DisplayName   string  `json:"displayName,omitempty"     db:"display_name"`
+	CountryCode   string  `json:"countryCode,omitempty"     db:"country_code"`
+	Category      string  `json:"category,omitempty"        db:"category"`
+	Status        string  `json:"status"                    db:"status"`
+	Notes         string  `json:"notes,omitempty"           db:"notes"`
+	CreatedAt     string  `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt     string  `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
+}
+
+func (p RoutePlace) GetID() string    { return p.ID }
+func (p *RoutePlace) SetID(id string) { p.ID = id }
+
 // PhotoIDs is a JSONB list of DMS attachment ids.
 type PhotoIDs []string
 

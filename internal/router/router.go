@@ -219,6 +219,8 @@ func New(repo *store.Repository, opts Options) *gin.Engine {
 
 	// Operations records and the carrier master (0057).
 	handlers.RegisterOperationsResources(api, repo)
+	// JMP waypoint library (0060) — researched places, not geofences.
+	(&handlers.RoutePlaces{Repo: repo}).Register(api)
 
 	handlers.NewRequestResource(repo, opts.Events).Register(api, "/requests")
 

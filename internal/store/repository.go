@@ -73,6 +73,7 @@ type Repository struct {
 	RouteETAs               *Collection[models.RouteETA, *models.RouteETA]
 	Carriers                *Collection[models.Carrier, *models.Carrier]
 	TripPODs                *Collection[models.TripPOD, *models.TripPOD]
+	RoutePlaces             *Collection[models.RoutePlace, *models.RoutePlace]
 
 	// Notifications is the per-user signal log surfaced by the bell.
 	// Doesn't follow the generic Collection pattern because every read /
@@ -123,6 +124,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 		RouteETAs:               NewCollection[models.RouteETA, *models.RouteETA](pool, "route_etas"),
 		Carriers:                NewCollection[models.Carrier, *models.Carrier](pool, "carriers"),
 		TripPODs:                NewCollection[models.TripPOD, *models.TripPOD](pool, "trip_pods"),
+		RoutePlaces:             NewCollection[models.RoutePlace, *models.RoutePlace](pool, "route_places"),
 
 		Notifications: &NotificationsStore{pool: pool},
 		UserProfiles:  &UserProfilesStore{pool: pool},
@@ -382,8 +384,8 @@ func (r *Repository) FuelDB() FuelDB {
 
 // SilenceUnused keeps the time import live when audit-row iteration is
 // bypassed by a direct LIMIT clause.
-var _ = time.Now
-
+var _ = time.Now
+
 // SchemaSpecs is every generic Collection's table and columns, for VerifySchema.
 //
 // Listed explicitly rather than reflected: the compiler then fails when a
@@ -391,27 +393,38 @@ var _ = time.Now
 // skip it and the check would quietly stop checking.
 func (r *Repository) SchemaSpecs() []ColumnSpec {
 	return []ColumnSpec{
-		r.Vehicles.Spec(),
-		r.Drivers.Spec(),
-		r.JMPs.Spec(),
-		r.Cargo.Spec(),
-		r.CargoDocs.Spec(),
-		r.Fuel.Spec(),
-		r.FuelRequests.Spec(),
-		r.Maintenance.Spec(),
-		r.Parts.Spec(),
-		r.Tyres.Spec(),
-		r.Trips.Spec(),
-		r.Safety.Spec(),
-		r.Compliance.Spec(),
-		r.Requests.Spec(),
-		r.Tasks.Spec(),
-		r.Deployment.Spec(),
+		r.Vehicles.Spec(),
+		r.Drivers.Spec(),
+		r.JMPs.Spec(),
+		r.Cargo.Spec(),
+		r.CargoDocs.Spec(),
+		r.Fuel.Spec(),
+		r.FuelRequests.Spec(),
+		r.Maintenance.Spec(),
+		r.Parts.Spec(),
+		r.Tyres.Spec(),
+		r.Trips.Spec(),
+		r.Safety.Spec(),
+		r.Compliance.Spec(),
+		r.Requests.Spec(),
+		r.Tasks.Spec(),
+		r.Deployment.Spec(),
 		r.VehicleCategories.Spec(),
 		r.PermitClasses.Spec(),
 		r.PermitAuthorisations.Spec(),
-		r.InspectionTemplates.Spec(),
-		r.Inspections.Spec(),
-		r.PMSchedules.Spec(),		r.WeighbridgeTickets.Spec(),		r.VehicleDiagnostics.Spec(),		r.DriverHOSLogs.Spec(),		r.DriverSafetyScores.Spec(),		r.FuelCardReconciliations.Spec(),		r.ServiceReminders.Spec(),		r.EmissionsEntries.Spec(),		r.RouteETAs.Spec(),		r.Carriers.Spec(),		r.TripPODs.Spec(),
-	}
+		r.InspectionTemplates.Spec(),
+		r.Inspections.Spec(),
+		r.PMSchedules.Spec(),
+		r.WeighbridgeTickets.Spec(),
+		r.VehicleDiagnostics.Spec(),
+		r.DriverHOSLogs.Spec(),
+		r.DriverSafetyScores.Spec(),
+		r.FuelCardReconciliations.Spec(),
+		r.ServiceReminders.Spec(),
+		r.EmissionsEntries.Spec(),
+		r.RouteETAs.Spec(),
+		r.Carriers.Spec(),
+		r.TripPODs.Spec(),
+		r.RoutePlaces.Spec(),
+	}
 }
