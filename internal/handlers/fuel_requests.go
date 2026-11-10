@@ -358,7 +358,13 @@ func (f *FuelRequests) validate(ctx context.Context, rec *models.FuelRequest) er
 	if !validFuelRequestStatus(rec.Status) {
 		return fmt.Errorf("%w: unknown status %q", errInvalidFuelRequest, rec.Status)
 	}
-	return validateVehicleExists(ctx, f.Repo, rec.VehicleID)
+	if err := validateVehicleExists(ctx, f.Repo, rec.VehicleID); err != nil {
+		return err
+	}
+	if err := validateFuelCardLink(ctx, f.Repo, rec.FuelCardID, rec.VehicleID, rec.DriverID); err != nil {
+		return fmt.Errorf("%w: %v", errInvalidFuelRequest, err)
+	}
+	return nil
 }
 
 func validFuelRequestStatus(s string) bool {

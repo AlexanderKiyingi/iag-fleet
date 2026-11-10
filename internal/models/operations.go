@@ -100,6 +100,52 @@ type DriverSafetyScore struct {
 func (d DriverSafetyScore) GetID() string    { return d.ID }
 func (d *DriverSafetyScore) SetID(id string) { d.ID = id }
 
+// FuelCard is a fleet fuel card assigned to exactly one vehicle or driver
+// while active (migration 0065).
+type FuelCard struct {
+	ID                 string   `json:"id"                           db:"id" dbcast:"uuid"`
+	CardNumber         string   `json:"cardNumber"                   db:"card_number"`
+	Last4              string   `json:"last4,omitempty"              db:"last4"`
+	Provider           string   `json:"provider,omitempty"           db:"provider"`
+	Label              string   `json:"label,omitempty"              db:"label"`
+	Currency           string   `json:"currency,omitempty"           db:"currency"`
+	VehicleID          string   `json:"vehicleId,omitempty"          db:"vehicle_id" dbcast:"uuid"`
+	DriverID           string   `json:"driverId,omitempty"           db:"driver_id" dbcast:"uuid"`
+	DailyLimitLitres   *float64 `json:"dailyLimitLitres,omitempty"   db:"daily_limit_litres"`
+	MonthlyLimitAmount *float64 `json:"monthlyLimitAmount,omitempty" db:"monthly_limit_amount"`
+	Status             string   `json:"status"                       db:"status"`
+	ExpiresOn          string   `json:"expiresOn,omitempty"          db:"expires_on" dbcast:"date"`
+	Notes              string   `json:"notes,omitempty"              db:"notes"`
+	CreatedAt          string   `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt          string   `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
+}
+
+func (f FuelCard) GetID() string    { return f.ID }
+func (f *FuelCard) SetID(id string) { f.ID = id }
+
+// FuelCardTransaction is a pump fill against a fuel card (typed or imported).
+type FuelCardTransaction struct {
+	ID                    string  `json:"id"                            db:"id" dbcast:"uuid"`
+	FuelCardID            string  `json:"fuelCardId"                    db:"fuel_card_id" dbcast:"uuid"`
+	Date                  string  `json:"date"                          db:"date" dbcast:"date"`
+	Litres                float64 `json:"litres"                        db:"litres"`
+	Amount                float64 `json:"amount"                        db:"amount"`
+	UnitPrice             float64 `json:"unitPrice,omitempty"           db:"unit_price"`
+	Station               string  `json:"station,omitempty"             db:"station"`
+	Merchant              string  `json:"merchant,omitempty"            db:"merchant"`
+	ExternalRef           string  `json:"externalRef,omitempty"         db:"external_ref"`
+	MatchStatus           string  `json:"matchStatus"                   db:"match_status"`
+	MatchedFuelRequestID  string  `json:"matchedFuelRequestId,omitempty" db:"matched_fuel_request_id" dbcast:"uuid"`
+	MatchedFuelRecordID   string  `json:"matchedFuelRecordId,omitempty"  db:"matched_fuel_record_id" dbcast:"uuid"`
+	ImportBatchID         string  `json:"importBatchId,omitempty"       db:"import_batch_id"`
+	Notes                 string  `json:"notes,omitempty"               db:"notes"`
+	CreatedAt             string  `json:"createdAt" db:"created_at" dbcast:"timestamptz" dbdefault:"true"`
+	UpdatedAt             string  `json:"updatedAt" db:"updated_at" dbcast:"timestamptz" dbdefault:"true"`
+}
+
+func (t FuelCardTransaction) GetID() string    { return t.ID }
+func (t *FuelCardTransaction) SetID(id string) { t.ID = id }
+
 // FuelCardReconciliation compares a card statement with the fuel log.
 type FuelCardReconciliation struct {
 	ID               string  `json:"id"                     db:"id" dbcast:"uuid"`

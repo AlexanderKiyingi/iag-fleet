@@ -61,6 +61,7 @@ func TestSchemaSpecsCoverEveryCollection(t *testing.T) {
 		"weighbridge_tickets", "vehicle_diagnostics", "driver_hos_logs",
 		"driver_safety_scores", "fuel_card_reconciliations", "service_reminders",
 		"emissions_entries", "route_etas", "carriers", "trip_pods", "route_places",
+		"fuel_cards", "fuel_card_transactions",
 	}
 	for _, table := range want {
 		if !seen[table] {

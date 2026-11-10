@@ -24,6 +24,7 @@ var platformAdminViewPermissions = []string{
 	"fleet.view_driver_safety_score", "fleet.view_fuel_card_reconciliation",
 	"fleet.view_service_reminder", "fleet.view_emissions_entry", "fleet.view_route_eta",
 	"fleet.view_carrier", "fleet.view_trip_pod",
+	"fleet.view_fuel_card", "fleet.view_fuel_card_transaction",
 }
 
 func hasPlatformAdminGroup(claims *authclient.Claims) bool {
