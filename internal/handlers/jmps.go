@@ -30,7 +30,7 @@ func NewJMPs(repo *store.Repository, osrmBaseURL string) *JMPs {
 			ServerOwnedFields: map[string]string{
 				"status":         "POST /api/jmps/:id/complete, /cancel or /complete-toolbox",
 				"dispatchStatus": "POST /api/jmps/:id/approve-dispatch",
-				"mileageStatus":  "POST /api/jmps/:id/approve-mileage",
+				"mileageStatus":  "POST /api/jmps/:id/submit-mileage or /approve-mileage",
 			},
 		},
 		RoutingOSRMURL: osrmBaseURL,
