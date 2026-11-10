@@ -168,6 +168,10 @@ func validateFuelValues(rec *models.FuelRecord) error {
 }
 
 func validateFuelRecord(ctx context.Context, repo *store.Repository, rec *models.FuelRecord, excludeID string) error {
+	if err := validateFuelCardLink(ctx, repo, rec.FuelCardID, rec.VehicleID, rec.DriverID); err != nil {
+		return err
+	}
+	fillFuelCardLast4(ctx, repo, rec)
 	if err := validateFuelValues(rec); err != nil {
 		return err
 	}

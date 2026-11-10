@@ -74,6 +74,8 @@ type Repository struct {
 	Carriers                *Collection[models.Carrier, *models.Carrier]
 	TripPODs                *Collection[models.TripPOD, *models.TripPOD]
 	RoutePlaces             *Collection[models.RoutePlace, *models.RoutePlace]
+	FuelCards               *Collection[models.FuelCard, *models.FuelCard]
+	FuelCardTransactions    *Collection[models.FuelCardTransaction, *models.FuelCardTransaction]
 
 	// Notifications is the per-user signal log surfaced by the bell.
 	// Doesn't follow the generic Collection pattern because every read /
@@ -125,6 +127,8 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 		Carriers:                NewCollection[models.Carrier, *models.Carrier](pool, "carriers"),
 		TripPODs:                NewCollection[models.TripPOD, *models.TripPOD](pool, "trip_pods"),
 		RoutePlaces:             NewCollection[models.RoutePlace, *models.RoutePlace](pool, "route_places"),
+		FuelCards:               NewCollection[models.FuelCard, *models.FuelCard](pool, "fuel_cards"),
+		FuelCardTransactions:    NewCollection[models.FuelCardTransaction, *models.FuelCardTransaction](pool, "fuel_card_transactions"),
 
 		Notifications: &NotificationsStore{pool: pool},
 		UserProfiles:  &UserProfilesStore{pool: pool},
@@ -426,5 +430,7 @@ func (r *Repository) SchemaSpecs() []ColumnSpec {
 		r.Carriers.Spec(),
 		r.TripPODs.Spec(),
 		r.RoutePlaces.Spec(),
+		r.FuelCards.Spec(),
+		r.FuelCardTransactions.Spec(),
 	}
 }

@@ -328,6 +328,7 @@ type FuelRecord struct {
 	PaymentMethod  string         `json:"paymentMethod,omitempty"  db:"payment_method"`
 	Attendant      string         `json:"attendant,omitempty"      db:"attendant"`
 	CardLast4      string         `json:"cardLast4,omitempty"      db:"card_last4"`
+	FuelCardID     string         `json:"fuelCardId,omitempty"     db:"fuel_card_id" dbcast:"uuid"`
 	Anomaly        *bool          `json:"anomaly,omitempty"        db:"anomaly"`
 	AnomalyReason  string         `json:"anomalyReason,omitempty"  db:"anomaly_reason"`
 	AnomalyType    string         `json:"anomalyType,omitempty"    db:"anomaly_type"`
@@ -658,6 +659,7 @@ type FuelRequest struct {
 	ApprovedBy      string  `json:"approvedBy,omitempty"     db:"approved_by"`
 	ApprovedAt      string  `json:"approvedAt,omitempty"     db:"approved_at"  dbcast:"timestamptz"`
 	FuelRecordID    string  `json:"fuelRecordId,omitempty"   db:"fuel_record_id" dbcast:"uuid"`
+	FuelCardID      string  `json:"fuelCardId,omitempty"     db:"fuel_card_id" dbcast:"uuid"`
 	CreatedBy       string  `json:"createdBy,omitempty"      db:"created_by"`
 	// Chain linkage — a fuel request raised for a specific service request
 	// and/or journey plan (empty when raised standalone against a vehicle).

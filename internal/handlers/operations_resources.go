@@ -158,6 +158,8 @@ func RegisterOperationsResources(api *gin.RouterGroup, repo *store.Repository) {
 				c.Status = "active"
 			}
 		}).Register(api, "/carriers")
+
+	RegisterFuelCardResources(api, repo)
 }
 
 // NewTripPODResource is proof of delivery (0058). A POD needs a trip and a

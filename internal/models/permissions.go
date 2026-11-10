@@ -28,6 +28,7 @@ var crudEntities = []string{
 	"weighbridge_ticket", "vehicle_diagnostic", "driver_hos_log",
 	"driver_safety_score", "fuel_card_reconciliation", "service_reminder",
 	"emissions_entry", "route_eta", "carrier", "trip_pod",
+	"fuel_card", "fuel_card_transaction",
 }
 
 var workflowPermissions = []PermissionDescriptor{
