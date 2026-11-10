@@ -48,6 +48,7 @@ func (w *Workflows) Register(rg *gin.RouterGroup) {
 	rg.POST("/jmps/:id/complete", auth.RequirePerm("complete_jmp"), w.completeJmp)
 	rg.POST("/jmps/:id/cancel", auth.RequirePerm("cancel_jmp"), w.cancelJmp)
 	rg.POST("/jmps/:id/approve-mileage", auth.RequirePerm("approve_mileage_jmp"), w.approveMileage)
+	rg.POST("/jmps/:id/submit-mileage", auth.RequirePerm("change_jmp"), w.submitMileage)
 	rg.POST("/jmps/:id/approve-dispatch", auth.RequirePerm("approve_jmp"), w.approveDispatch)
 
 	// Cargo
@@ -239,6 +240,48 @@ func (w *Workflows) completeJmp(c *gin.Context) {
 type approveMileageRequest struct {
 	Approved bool   `json:"approved"`
 	Notes    string `json:"notes"`
+}
+
+// submitMileage moves a claim Pending → Submitted so the Approvals inbox can
+// pick it up. MileageStatus is server-owned; without this verb the form cannot
+// advance the claim and approve-mileage never sees a Submitted row.
+func (w *Workflows) submitMileage(c *gin.Context) {
+	id := c.Param("id")
+	ctx := c.Request.Context()
+	existing, err := w.Repo.JMPs.Get(ctx, id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if existing.Status != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":  "mileage can only be submitted on an active journey",
+			"status": existing.Status,
+		})
+		return
+	}
+	status := strings.TrimSpace(existing.MileageStatus)
+	if status != "" && !strings.EqualFold(status, "Pending") {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":         "mileage is not pending submission",
+			"mileageStatus": existing.MileageStatus,
+		})
+		return
+	}
+	if !w.gateOrder(c, existing.DispatchStatus != "Rejected", "jmp", id, "submit-mileage",
+		"dispatch was rejected — mileage cannot be submitted for this journey") {
+		return
+	}
+	updated, err := w.Repo.JMPs.Update(ctx, id, func(j *models.JMP) {
+		j.MileageStatus = "Submitted"
+		j.MileageRejectReason = ""
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	w.Repo.LogBest(ctx, "submit-mileage", "jmp", id, "", currentUser(c, w.Repo))
+	c.JSON(http.StatusOK, updated)
 }
 
 func (w *Workflows) approveMileage(c *gin.Context) {
