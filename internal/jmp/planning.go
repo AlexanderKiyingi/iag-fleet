@@ -36,7 +36,7 @@ func Enrich(ctx context.Context, j *models.JMP, osrmBaseURL string, vehicle *mod
 	RecalculateBudget(j)
 
 	if j.DistanceKm <= 0 {
-		km, detail := estimateDistanceKm(ctx, osrmBaseURL, j.DesignatedParking)
+		km, detail := estimateDistanceKm(ctx, osrmBaseURL, j.RouteSummary, j.DesignatedParking)
 		if km > 0 {
 			j.DistanceKm = math.Round(km*10) / 10
 			if j.RouteDetail == "" {
@@ -187,12 +187,11 @@ func baseDieselPriceUGX() float64 {
 	return fuel.BaseDieselPriceUGX()
 }
 
-func estimateDistanceKm(ctx context.Context, osrmBaseURL, destination string) (km float64, detail string) {
-	destLat, destLng, matched := matchDestination(destination)
-	if !matched {
-		return 0, "distance not estimated — destination not matched to a known POI"
+func estimateDistanceKm(ctx context.Context, osrmBaseURL, routeSummary, destination string) (km float64, detail string) {
+	points := routePointsFromJMP(routeSummary, destination)
+	if len(points) < 2 {
+		return 0, "distance not estimated — set From/To map pins (or a known destination POI)"
 	}
-	points := [][2]float64{{acpLat, acpLng}, {destLat, destLng}}
 	base := strings.TrimSpace(osrmBaseURL)
 	if base != "" {
 		if rr, err := routing.RequestOSRM(ctx, base, "driving", points); err == nil && rr != nil && rr.DistanceM > 0 {
@@ -206,16 +205,79 @@ func estimateDistanceKm(ctx context.Context, osrmBaseURL, destination string) (k
 	return 0, ""
 }
 
+// jmpPinRe matches `@lat,lng` or `Name@lat,lng` (same encoding as iag-fleet jmp-route.ts).
+var jmpPinRe = regexp.MustCompile(`(?i)^(?:[^@→\n]+?)?@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$`)
+
+func parseJMPPin(token string) (lat, lng float64, ok bool) {
+	m := jmpPinRe.FindStringSubmatch(strings.TrimSpace(token))
+	if len(m) != 3 {
+		return 0, 0, false
+	}
+	lat, err1 := strconv.ParseFloat(m[1], 64)
+	lng, err2 := strconv.ParseFloat(m[2], 64)
+	if err1 != nil || err2 != nil || lat < -90 || lat > 90 || lng < -180 || lng > 180 {
+		return 0, 0, false
+	}
+	return lat, lng, true
+}
+
+// routePointsFromJMP prefers From→stops→To pins in routeSummary; falls back to
+// ACP → matched destination only when no usable pin pair exists.
+func routePointsFromJMP(routeSummary, destination string) [][2]float64 {
+	parts := splitRouteLegs(routeSummary)
+	points := make([][2]float64, 0, len(parts)+1)
+	for _, part := range parts {
+		if lat, lng, ok := parseJMPPin(part); ok {
+			points = append(points, [2]float64{lat, lng})
+		}
+	}
+	if len(points) >= 2 {
+		return points
+	}
+	// Single pin in summary + pin in designatedParking.
+	if lat, lng, ok := parseJMPPin(destination); ok {
+		if len(points) == 1 {
+			return [][2]float64{points[0], {lat, lng}}
+		}
+	}
+	if len(points) == 1 {
+		if lat, lng, ok := matchDestination(destination); ok {
+			return [][2]float64{points[0], {lat, lng}}
+		}
+	}
+	if destLat, destLng, ok := matchDestination(destination); ok {
+		return [][2]float64{{acpLat, acpLng}, {destLat, destLng}}
+	}
+	return nil
+}
+
+func splitRouteLegs(summary string) []string {
+	raw := strings.Split(summary, "→")
+	out := make([]string, 0, len(raw))
+	for _, p := range raw {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // matchDestination resolves designated parking / destination text to a reference POI.
 func matchDestination(destination string) (lat, lng float64, ok bool) {
 	d := strings.ToLower(strings.TrimSpace(destination))
 	if d == "" {
 		return 0, 0, false
 	}
+	if lat, lng, ok := parseJMPPin(d); ok {
+		return lat, lng, true
+	}
 	bestLen := 0
 	for _, p := range models.POIs {
 		name := strings.ToLower(p.Name)
-		if strings.Contains(d, name) || strings.Contains(name, d) {
+		// Prefer destination containing the POI name (not short fragments
+		// matching long names the other way — "a" must not pick "Kampala").
+		if len(name) >= 4 && strings.Contains(d, name) {
 			if len(name) > bestLen {
 				bestLen = len(name)
 				lat, lng, ok = p.Lat, p.Lng, true
@@ -230,19 +292,24 @@ func matchDestination(destination string) (lat, lng float64, ok bool) {
 		"kihihi":    {-0.943, 29.989},
 		"mombasa":   {-4.050, 39.667},
 		"kampala":   {0.327, 32.591},
+		"ntinda":    {0.3608, 32.6194},
 		"nairobi":   {-1.286, 36.817},
 		"mbarara":   {-0.607, 30.658},
 		"malaba":    {0.637, 34.265},
 		"juba":      {4.853, 31.583},
 		"ntungamo":  {-0.878, 30.264},
+		"rwashamaire": {-0.814, 30.067},
+		"rwashamire":  {-0.814, 30.067},
 		"nyabihoko": {-0.912, 30.118},
 	}
+	bestToken := ""
 	for token, coord := range aliases {
-		if strings.Contains(d, token) {
-			return coord[0], coord[1], true
+		if strings.Contains(d, token) && len(token) > len(bestToken) {
+			bestToken = token
+			lat, lng, ok = coord[0], coord[1], true
 		}
 	}
-	return 0, 0, false
+	return lat, lng, ok
 }
 
 // ComputeExpectedDays mirrors the frontend / workflow helper.

@@ -29,6 +29,30 @@ func TestEnrich_fillsDistanceAndFuel(t *testing.T) {
 	}
 }
 
+func TestEnrich_usesRoutePinsNotHardcodedACP(t *testing.T) {
+	// Rwashamaire Estate → Ntinda (Kampala). Must be a western→central corridor
+	// (~300 km), not a greater-Kampala hop (~38 km) from a misplaced ACP.
+	j := &models.JMP{
+		RouteSummary:      "Rwashamaire Estate@-0.814000,30.067000 → Ntinda@0.360800,32.619400",
+		DesignatedParking: "Ntinda@0.360800,32.619400",
+	}
+	Enrich(context.Background(), j, "", nil)
+	if j.DistanceKm < 250 || j.DistanceKm > 450 {
+		t.Fatalf("expected ~300 km corridor, got %v km (detail=%q)", j.DistanceKm, j.RouteDetail)
+	}
+}
+
+func TestParseJMPPin(t *testing.T) {
+	lat, lng, ok := parseJMPPin("Rwashamaire@-0.814,30.067")
+	if !ok || lat != -0.814 || lng != 30.067 {
+		t.Fatalf("named pin: %v %v %v", lat, lng, ok)
+	}
+	lat, lng, ok = parseJMPPin("@0.36,32.62")
+	if !ok || lat != 0.36 || lng != 32.62 {
+		t.Fatalf("bare pin: %v %v %v", lat, lng, ok)
+	}
+}
+
 func TestEstimateFuelLitres_usesEngineCapacity(t *testing.T) {
 	truck := &models.Vehicle{EngineCapacity: "4.0L", Type: "Truck"}
 	flat := estimateFuelLitres(100, nil)
