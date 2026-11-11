@@ -51,6 +51,10 @@ type fleetVehicleSnap struct {
 	// empty while the map markers moved.
 	Fuel        float64 `json:"fuel"`
 	FuelTracker bool    `json:"fuelTracker"`
+	// Odo is the telemetry odometer (km). The tracking card needs it beside
+	// speed/fuel; without it on the stream the desk only saw odo after a
+	// full vehicles hydrate.
+	Odo float64 `json:"odo"`
 }
 
 type fleetPayload struct {
@@ -136,6 +140,6 @@ func vehicleSnap(v models.Vehicle) fleetVehicleSnap {
 		ID: v.ID, Plate: v.Plate, Lat: v.Lat, Lng: v.Lng,
 		Status: v.Status, Heading: v.Heading, Location: v.Location,
 		Speed: v.Speed, LastSeen: v.LastSeen, LastFixSource: v.LastFixSource,
-		Fuel: v.Fuel, FuelTracker: v.FuelTracker,
+		Fuel: v.Fuel, FuelTracker: v.FuelTracker, Odo: v.Odo,
 	}
 }
