@@ -503,6 +503,11 @@ type Trip struct {
 	// with. Pointers so "not recorded" stays distinct from a genuine 0.
 	OdometerStart *float64 `json:"odometerStart,omitempty" db:"odometer_start"`
 	OdometerEnd   *float64 `json:"odometerEnd,omitempty"   db:"odometer_end"`
+	// Distribution fulfilment links (0068) — optional refs to packing / SCM order.
+	PackingListID string `json:"packingListId,omitempty" db:"packing_list_id"`
+	SalesOrderRef string `json:"salesOrderRef,omitempty" db:"sales_order_ref"`
+	// Planned / executed stops for the run (0067). JSONB via TripStops.
+	Stops TripStops `json:"stops,omitempty" db:"stops" dbdefault:"true"`
 	// Record timestamps (0050). Written by the touch_row trigger, which fires
 	// after the statement's SET list and therefore wins over whatever the
 	// reflective UPDATE binds — created_at is immutable, updated_at always
@@ -514,6 +519,17 @@ type Trip struct {
 
 func (t Trip) GetID() string    { return t.ID }
 func (t *Trip) SetID(id string) { t.ID = id }
+
+// TripStop is one drop / outlet on a delivery run.
+type TripStop struct {
+	Seq      int    `json:"seq"`
+	OutletID string `json:"outletId,omitempty"`
+	Customer string `json:"customer,omitempty"`
+	Status   string `json:"status,omitempty"` // planned | arrived | delivered | skipped
+}
+
+// TripStops is the JSONB stop list on trips (migration 0067).
+type TripStops []TripStop
 
 type SafetyEvent struct {
 	ID            string        `json:"id"                  db:"id" dbcast:"uuid"`

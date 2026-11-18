@@ -284,3 +284,19 @@ func (p PhotoIDs) Value() (driver.Value, error) {
 	}
 	return json.Marshal(p)
 }
+
+func (s *TripStops) Scan(src any) error {
+	b, err := jsonbBytes(src)
+	if err != nil || b == nil {
+		*s = nil
+		return err
+	}
+	return json.Unmarshal(b, s)
+}
+
+func (s TripStops) Value() (driver.Value, error) {
+	if s == nil {
+		return []byte(`[]`), nil
+	}
+	return json.Marshal(s)
+}

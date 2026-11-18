@@ -35,6 +35,9 @@ var notUUID = map[string]string{
 
 	// A log table keyed by bigint, not a uuid entity.
 	"FuelRecord.fuel_event_id": "fuel_events.id is bigint",
+
+	// Warehouse packing list business id (TEXT), not a fleet UUID.
+	"Trip.packing_list_id": "id owned by iag-warehouse packing",
 }
 
 func TestEntityReferenceColumnsAreUUID(t *testing.T) {
@@ -82,7 +85,7 @@ func TestEntityReferenceColumnsAreUUID(t *testing.T) {
 // exists hides the fact that nothing is being excluded any more.
 func TestNotUUIDExceptionsAllExist(t *testing.T) {
 	types := map[string]reflect.Type{}
-	for _, model := range []any{Driver{}, TaskItem{}, Part{}, FuelRecord{}} {
+	for _, model := range []any{Driver{}, TaskItem{}, Part{}, FuelRecord{}, Trip{}} {
 		rt := reflect.TypeOf(model)
 		types[rt.Name()] = rt
 	}
